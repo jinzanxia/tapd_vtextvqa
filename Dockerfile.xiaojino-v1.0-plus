@@ -1,0 +1,33 @@
+FROM xiaojino/sfa:v1.0
+
+SHELL ["/bin/bash", "-lc"]
+
+WORKDIR /workspace/SFA
+
+# Copy project into image so it can run without host bind mounts.
+COPY . /workspace/SFA
+
+# Build/runtime deps for detectron2/adet extensions.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git \
+    ninja-build \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+# Ensure conda env "sfa" is used if available in base image.
+ENV PATH=/opt/conda/envs/sfa/bin:/opt/conda/bin:${PATH}
+ENV CUDA_HOME=/usr/local/cuda
+ENV FORCE_CUDA=1
+ENV TORCH_CUDA_ARCH_LIST="7.0;7.5;8.0;8.6;8.9;9.0"
+ENV TOKENIZERS_PARALLELISM=false
+
+# Install detectron2 and GoMatching/adet from local source.
+RUN python -m pip install --no-cache-dir --upgrade pip setuptools wheel && \
+    python -m pip install --no-cache-dir \
+      cython pyyaml tqdm termcolor cloudpickle tabulate tensorboard \
+      fvcore iopath omegaconf pycocotools && \
+    python -m pip install --no-cache-dir --no-build-isolation -e ./GoMatching/third_party/detectron2 && \
+    python -m pip install --no-cache-dir --no-build-isolation --no-deps -e ./GoMatching/third_party
+
+CMD ["bash"]
+

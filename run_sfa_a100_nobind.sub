@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=sfa_m4_eval
+#SBATCH --job-name=sfa_m4_nobind
 #SBATCH --partition=a100
 #SBATCH --gpus=1
 #SBATCH --nodes=1
@@ -11,38 +11,38 @@
 
 set -euo pipefail
 
-# ===== User-configurable paths =====
-IMAGE="docker://xiaojino/sfa:v1.0"
+# No-bind mode:
+# 1) Image must already contain SFA code + detectron2/adet.
+# 2) DATA_DIR must be directly visible from inside container on your cluster.
+
+IMAGE="docker://xiaojino/sfa:v1.1"
 CODE_DIR="/workspace/SFA"
+SCRIPT_PATH="${CODE_DIR}/infer_codes/qwen.py"
+
 DATA_DIR="/mnt/fast/nobackup/scratch4weeks/nc324se/data/M4-ViteVQA"
 GT_JSON="${DATA_DIR}/Annotations/ViteVQA_0.0.2_t1s1val.json"
 VIDEO_DIR="${DATA_DIR}/video"
-OUTPUT_JSON="${DATA_DIR}/m4_vitevqa_val_pred.json"
-
-# GoMatching checkpoint in dataset dir:
 VTS_MODEL="${DATA_DIR}/GoMatching_pp_vitaeb_bovtext.pth"
+OUTPUT_JSON="${DATA_DIR}/m4_vitevqa_val_pred.json"
 
 mkdir -p ./logs
 
-# Prefer apptainer, fallback to singularity.
 if command -v apptainer >/dev/null 2>&1; then
   CTR="apptainer"
 elif command -v singularity >/dev/null 2>&1; then
   CTR="singularity"
 else
-  echo "Neither apptainer nor singularity found on this cluster."
+  echo "Neither apptainer nor singularity found."
   exit 1
 fi
 
-SCRIPT_PATH="${CODE_DIR}/infer_codes/qwen.py"
-
-# Preflight checks inside container (no bind mode).
+# Preflight checks in container.
 ${CTR} exec --nv "${IMAGE}" bash -lc "
   test -f '${SCRIPT_PATH}' || { echo 'Missing script in image: ${SCRIPT_PATH}'; exit 1; }
   test -f '${GT_JSON}' || { echo 'Missing gt json in container: ${GT_JSON}'; exit 1; }
   test -d '${VIDEO_DIR}' || { echo 'Missing video dir in container: ${VIDEO_DIR}'; exit 1; }
-  test -f '${VTS_MODEL}' || { echo 'Missing VTS model in container: ${VTS_MODEL}'; exit 1; }
-  python -c 'import detectron2' || { echo 'detectron2 is not installed in image ${IMAGE}'; exit 1; }
+  test -f '${VTS_MODEL}' || { echo 'Missing model file in container: ${VTS_MODEL}'; exit 1; }
+  python -c 'import detectron2, adet' || { echo 'Missing detectron2/adet in image'; exit 1; }
 "
 
 ${CTR} exec --nv \
@@ -56,3 +56,4 @@ ${CTR} exec --nv \
     --vts-model "${VTS_MODEL}" \
     --video-dir "${VIDEO_DIR}" \
     --output "${OUTPUT_JSON}"
+
