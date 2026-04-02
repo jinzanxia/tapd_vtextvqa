@@ -9,14 +9,13 @@
 #SBATCH -o ./logs/slurm.%N.%j.out
 #SBATCH -e ./logs/slurm.%N.%j.err
 
-set -euo pipefail
 
 # No-bind mode:
 # 1) Image must already contain SFA code + detectron2/adet.
 # 2) DATA_DIR must be directly visible from inside container on your cluster.
 
 IMAGE="docker://xiaojino/sfa:v1.1"
-CODE_DIR="/workspace/SFA"
+CODE_DIR="/workspace/SFA-main"
 SCRIPT_PATH="${CODE_DIR}/infer_codes/qwen.py"
 
 DATA_DIR="/mnt/fast/nobackup/scratch4weeks/nc324se/data/M4-ViteVQA"
