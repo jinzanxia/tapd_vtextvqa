@@ -60,7 +60,8 @@ ${CTR} exec --nv \
 
     if ! python -c "import detectron2; import adet" >/dev/null 2>&1; then
       echo "[bootstrap] Installing detectron2/adet into user site ..."
-      python -m pip install --user --no-cache-dir -r ./GoMatching/third_party/detectron2/requirements.txt
+      python -m pip install --user --no-cache-dir \
+        cython pyyaml tqdm termcolor cloudpickle tabulate tensorboard fvcore iopath omegaconf pycocotools
       python -m pip install --user --no-cache-dir --no-build-isolation -e ./GoMatching/third_party/detectron2
       python -m pip install --user --no-cache-dir --no-build-isolation --no-deps -e ./GoMatching/third_party
     fi
