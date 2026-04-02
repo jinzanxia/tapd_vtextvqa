@@ -9,6 +9,7 @@
 #SBATCH -o ./logs/slurm.%N.%j.out
 #SBATCH -e ./logs/slurm.%N.%j.err
 
+set -euo pipefail
 
 # ===== User-configurable paths =====
 IMAGE="docker://xiaojino/sfa:v1.0"
@@ -51,10 +52,24 @@ ${CTR} exec --nv \
   --env TRANSFORMERS_CACHE=/hf_cache \
   --env TOKENIZERS_PARALLELISM=false \
   "${IMAGE}" \
-  python "${SCRIPT_PATH}" \
-    --gt-json /data/Annotations/ViteVQA_0.0.2_t1s1val.json \
-    --model-name Qwen/Qwen2.5-VL-7B-Instruct \
-    --vts-config ./GoMatching/configs/GoMatching_PP_BOVText_vit.yaml \
-    --vts-model /data/GoMatching_pp_vitaeb_bovtext.pth \
-    --video-dir /data/video \
-    --output "${OUTPUT_JSON}"
+  bash -lc '
+    set -euo pipefail
+    export PYTHONUSERBASE=/workspace/SFA/.pyuser
+    export PATH=/workspace/SFA/.pyuser/bin:$PATH
+    export FORCE_CUDA=1
+
+    if ! python -c "import detectron2; import adet" >/dev/null 2>&1; then
+      echo "[bootstrap] Installing detectron2/adet into user site ..."
+      python -m pip install --user --no-cache-dir -r ./GoMatching/third_party/detectron2/requirements.txt
+      python -m pip install --user --no-cache-dir --no-build-isolation -e ./GoMatching/third_party/detectron2
+      python -m pip install --user --no-cache-dir --no-build-isolation --no-deps -e ./GoMatching/third_party
+    fi
+
+    python "'"${SCRIPT_PATH}"'" \
+      --gt-json /data/Annotations/ViteVQA_0.0.2_t1s1val.json \
+      --model-name Qwen/Qwen2.5-VL-7B-Instruct \
+      --vts-config ./GoMatching/configs/GoMatching_PP_BOVText_vit.yaml \
+      --vts-model /data/GoMatching_pp_vitaeb_bovtext.pth \
+      --video-dir /data/video \
+      --output "'"${OUTPUT_JSON}"'"
+  '
