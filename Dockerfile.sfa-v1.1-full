@@ -24,6 +24,7 @@ ENV TOKENIZERS_PARALLELISM=false
 # Install Python dependencies first.
 RUN python -m pip install --no-cache-dir --upgrade pip setuptools wheel && \
     python -m pip install --no-cache-dir -r /workspace/SFA/requirements.txt && \
+    python -m pip install --no-cache-dir "Pillow<10" && \
     python -m pip install --no-cache-dir \
       cython pyyaml tqdm termcolor cloudpickle tabulate tensorboard \
       fvcore iopath omegaconf pycocotools
@@ -40,4 +41,3 @@ print("detectron2/adet OK")
 PY
 
 CMD ["bash"]
-
