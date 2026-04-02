@@ -46,11 +46,14 @@ ${CTR} exec --nv "${IMAGE}" bash -lc "
 ${CTR} exec --nv \
   --env TOKENIZERS_PARALLELISM=false \
   "${IMAGE}" \
-  python "${SCRIPT_PATH}" \
-    --gt-json "${GT_JSON}" \
-    --model-name Qwen/Qwen2.5-VL-7B-Instruct \
-    --vts-config ./GoMatching/configs/GoMatching_PP_BOVText_vit.yaml \
-    --vts-model "${VTS_MODEL}" \
-    --video-dir "${VIDEO_DIR}" \
-    --output "${OUTPUT_JSON}"
-
+  bash -lc "
+    python -c 'import flash_attn' >/dev/null 2>&1 || \
+      python -m pip install --no-cache-dir --no-build-isolation flash-attn==2.7.2.post1
+    python '${SCRIPT_PATH}' \
+      --gt-json '${GT_JSON}' \
+      --model-name Qwen/Qwen2.5-VL-7B-Instruct \
+      --vts-config ./GoMatching/configs/GoMatching_PP_BOVText_vit.yaml \
+      --vts-model '${VTS_MODEL}' \
+      --video-dir '${VIDEO_DIR}' \
+      --output '${OUTPUT_JSON}'
+  "
