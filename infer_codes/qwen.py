@@ -58,7 +58,7 @@ if __name__ == "__main__":
     print(gt_json, save_json)
     gt_ans = {}
     pred_ans = {}
-    with open(gt_json, 'r') as f:
+    with open(gt_json, 'r', encoding='utf-8') as f:
         gt = json.load(f)
         f.close()
     total_time = 0
@@ -132,7 +132,7 @@ if __name__ == "__main__":
     json_fp.close()
 
     del pred_ans
-    with open(save_json, 'r') as f1:
+    with open(save_json, 'r', encoding='utf-8') as f1:
         p_ans = json.load(f1)
         f1.close()
     anls = anls_metr._compute(predictions=p_ans, references=gt_ans)
