@@ -60,10 +60,37 @@ logger.info(f"set VIDEO_TOTAL_PIXELS: {VIDEO_TOTAL_PIXELS}")
 ### key frame zoom select
 a_token_id = 32 ### 'A' token id
 
-def set_key_conf(w_size=0.6, thrd=0.7):
-    global win_size, threshold
+def set_key_conf(w_size=0.6, thrd=0.7, focus_bonus=True):
+    global win_size, threshold, use_focus_bonus
     win_size = w_size
     threshold = thrd
+    use_focus_bonus = focus_bonus
+
+
+def format_ocr_prompt(text_lists, max_chars=500):
+    """Format OCR text from all frames into a deduplicated prompt string.
+    
+    Args:
+        text_lists: list[list[str]], OCR texts per frame from ocr_det_with_text()
+        max_chars: maximum characters for the OCR portion of the prompt
+    Returns:
+        str: formatted prompt string, empty string if no valid text found
+    """
+    seen = set()
+    unique_texts = []
+    for frame_texts in text_lists:
+        for t in frame_texts:
+            t_stripped = t.strip()
+            if len(t_stripped) > 1 and t_stripped not in seen:
+                seen.add(t_stripped)
+                unique_texts.append(t_stripped)
+    if not unique_texts:
+        return ''
+    text_str = ', '.join(f'"{t}"' for t in unique_texts)
+    if len(text_str) > max_chars:
+        text_str = text_str[:max_chars].rsplit(',', 1)[0]
+    return f'The following text was detected in the video (may contain OCR errors): {text_str}\n'
+
 
 def setup_cfg(cfg_path, model_path, device):
     global CTLABELS, voc_size
@@ -182,7 +209,7 @@ def ocr_det_with_text(video):
     return box_list, text_list
     
 def select_key_zoom(text_boxes_list, video, question, text_list=None):
-    global vlm_model, vlm_processor, threshold, win_size
+    global vlm_model, vlm_processor, threshold, win_size, use_focus_bonus
     h, w = video.shape[1:3]
     aspect_ratio = w / h
     key_frame_zoom = []
@@ -199,7 +226,16 @@ def select_key_zoom(text_boxes_list, video, question, text_list=None):
         },
     ]
     
+    question_lower = question.lower().split()
+
     for f_id, (text_boxes, frame) in enumerate(zip(text_boxes_list, video)):
+        frame_texts = text_list[f_id] if text_list and f_id < len(text_list) else []
+        # check if any OCR text in this frame overlaps with question words
+        text_bonus = 0.0
+        if use_focus_bonus and frame_texts:
+            frame_text_lower = ' '.join(t.lower() for t in frame_texts)
+            if any(qw in frame_text_lower for qw in question_lower if len(qw) > 2):
+                text_bonus = 0.15
         win_w, win_h = int(win_size * w), int(win_size * h)
         start_coords = [
         (0, 0),
@@ -270,6 +306,7 @@ def select_key_zoom(text_boxes_list, video, question, text_list=None):
 
                 ### threshold
                 a_probabilities = torch.nn.functional.softmax(logits, dim=-1)[:, a_token_id]
+                a_probabilities = a_probabilities + text_bonus
                 max_val, max_id = torch.max(a_probabilities, dim=0)
                 if max_val > threshold:
                     key_frame_zoom.append(np.array(sub_imgs[max_id].resize((w, h))))
@@ -566,9 +603,8 @@ def fetch_video(ele: dict, question: str, image_factor: int = IMAGE_FACTOR, retu
             logger.warning(f"video_reader_backend {video_reader_backend} error, use torchvision as default, msg: {e}")
             video, sample_fps = VIDEO_READER_BACKENDS["torchvision"](ele)
         
-        # text_boxes_list, text_list = ocr_det_with_text(video)
-        text_boxes_list = ocr_det(video)
-        key_frame_zoom = select_key_zoom(text_boxes_list, video, question)
+        text_boxes_list, text_list = ocr_det_with_text(video)
+        key_frame_zoom = select_key_zoom(text_boxes_list, video, question, text_list=text_list)
         
         oframes = video.shape[0]
         all_oframes += oframes
@@ -616,7 +652,7 @@ def fetch_video(ele: dict, question: str, image_factor: int = IMAGE_FACTOR, retu
             antialias=True,
         ).float()
         if return_video_sample_fps:
-            return video, sample_fps
+            return video, sample_fps, text_list
         return video
     else:
         assert isinstance(ele["video"], (list, tuple))
@@ -631,7 +667,7 @@ def fetch_video(ele: dict, question: str, image_factor: int = IMAGE_FACTOR, retu
         if len(images) < nframes:
             images.extend([images[-1]] * (nframes - len(images)))
         if return_video_sample_fps:
-            return images, process_info.pop("fps", 2.0)
+            return images, process_info.pop("fps", 2.0), []
         return images
 
 
@@ -664,13 +700,15 @@ def process_vision_info(
     image_inputs = []
     video_inputs = []
     video_sample_fps_list = []
+    all_text_lists = []
     for vision_info in vision_infos:
         if "image" in vision_info or "image_url" in vision_info:
             image_inputs.append(fetch_image(vision_info))
         elif "video" in vision_info:
-            video_input, video_sample_fps = fetch_video(vision_info, question, return_video_sample_fps=True)
+            video_input, video_sample_fps, text_list = fetch_video(vision_info, question, return_video_sample_fps=True)
             video_sample_fps_list.append(video_sample_fps)
             video_inputs.append(video_input)
+            all_text_lists.append(text_list)
         else:
             raise ValueError("image, image_url or video should in content.")
     if len(image_inputs) == 0:
@@ -678,6 +716,6 @@ def process_vision_info(
     if len(video_inputs) == 0:
         video_inputs = None
     if return_video_kwargs:
-        return image_inputs, video_inputs, {'fps': video_sample_fps_list}
+        return image_inputs, video_inputs, {'fps': video_sample_fps_list}, all_text_lists
     return image_inputs, video_inputs
 

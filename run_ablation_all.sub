@@ -1,0 +1,100 @@
+#!/bin/bash
+#SBATCH --job-name=sfa_ablation
+#SBATCH --partition=a100
+#SBATCH --gpus=1
+#SBATCH --nodes=1
+#SBATCH --ntasks-per-node=1
+#SBATCH --mem=80G
+#SBATCH --time=48:00:00
+#SBATCH --array=0-3
+#SBATCH -o ./logs/ablation_%a.%N.%j.out
+#SBATCH -e ./logs/ablation_%a.%N.%j.err
+
+set -euo pipefail
+
+# ===== User-configurable paths =====
+IMAGE="docker://xiaojino/sfa:v1.2"
+SCRIPT_PATH="$PWD/infer_codes/qwen.py"
+
+DATA_DIR="/mnt/fast/nobackup/scratch4weeks/nc324se/data/M4-ViteVQA"
+GT_JSON="${DATA_DIR}/Annotations/ViteVQA_0.0.2_t1s1val.json"
+VIDEO_DIR="${DATA_DIR}/video"
+VTS_MODEL="${DATA_DIR}/GoMatching_pp_vitaeb_bovtext.pth"
+
+mkdir -p ./logs ./results
+
+# ===== Ablation experiment definitions =====
+# Array index → experiment config
+#   0: A — Baseline (no OCR text, original SFA)
+#   1: B — + OCR text injected into prompt
+#   2: C — + OCR text + Focus text matching bonus
+#   3: D — No OCR text but with Focus text matching bonus only
+
+EXPERIMENT_NAMES=("baseline" "ocr_text" "focus_bonus" "ocr_text_focus_bonus")
+
+case ${SLURM_ARRAY_TASK_ID} in
+  0)
+    # A: Baseline — no OCR text, no Focus bonus (original SFA)
+    EXTRA_ARGS="--no-ocr-text --no-focus-bonus"
+    ;;
+  1)
+    # B: OCR text in prompt only (no Focus bonus)
+    EXTRA_ARGS="--use-ocr-text --max-ocr-chars 500 --no-focus-bonus"
+    ;;
+  2)
+    # C: Focus bonus only (no OCR text in prompt)
+    EXTRA_ARGS="--no-ocr-text --use-focus-bonus"
+    ;;
+  3)
+    # D: OCR text + Focus bonus (full new pipeline)
+    EXTRA_ARGS="--use-ocr-text --max-ocr-chars 500 --use-focus-bonus"
+    ;;
+esac
+
+EXP_NAME="${EXPERIMENT_NAMES[${SLURM_ARRAY_TASK_ID}]}"
+OUTPUT_JSON="./results/ablation_${EXP_NAME}.json"
+
+echo "=========================================="
+echo "Ablation experiment: ${EXP_NAME}"
+echo "SLURM_ARRAY_TASK_ID: ${SLURM_ARRAY_TASK_ID}"
+echo "EXTRA_ARGS: ${EXTRA_ARGS}"
+echo "OUTPUT_JSON: ${OUTPUT_JSON}"
+echo "=========================================="
+
+# Detect container runtime
+if command -v apptainer >/dev/null 2>&1; then
+  CTR="apptainer"
+elif command -v singularity >/dev/null 2>&1; then
+  CTR="singularity"
+else
+  echo "Neither apptainer nor singularity found."
+  exit 1
+fi
+
+# Preflight checks
+${CTR} exec --nv "${IMAGE}" bash -lc "
+  test -f '${SCRIPT_PATH}' || { echo 'Missing script: ${SCRIPT_PATH}'; exit 1; }
+  test -f '${GT_JSON}'     || { echo 'Missing gt json: ${GT_JSON}'; exit 1; }
+  test -d '${VIDEO_DIR}'   || { echo 'Missing video dir: ${VIDEO_DIR}'; exit 1; }
+  test -f '${VTS_MODEL}'   || { echo 'Missing model: ${VTS_MODEL}'; exit 1; }
+  python -c 'import detectron2, adet' || { echo 'Missing detectron2/adet in image'; exit 1; }
+"
+
+# Run experiment
+${CTR} exec --nv \
+  --env TOKENIZERS_PARALLELISM=false \
+  "${IMAGE}" \
+  bash -lc "
+    python -c 'import flash_attn' >/dev/null 2>&1 || \
+      python -m pip install --no-cache-dir --no-build-isolation flash-attn==2.7.2.post1
+    python '${SCRIPT_PATH}' \
+      --gt-json '${GT_JSON}' \
+      --model-name Qwen/Qwen2.5-VL-7B-Instruct \
+      --vts-config ./GoMatching/configs/GoMatching_PP_BOVText_vit.yaml \
+      --vts-model '${VTS_MODEL}' \
+      --video-dir '${VIDEO_DIR}' \
+      --output '${OUTPUT_JSON}' \
+      ${EXTRA_ARGS}
+  "
+
+echo "Experiment ${EXP_NAME} finished. Results: ${OUTPUT_JSON}"

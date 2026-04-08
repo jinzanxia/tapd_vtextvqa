@@ -3,4 +3,6 @@ python infer_codes/qwen.py --gt-json path/datasets/M4-ViteVQA/Annotations/ViteVQ
     --vts-config ./GoMatching/configs/GoMatching_PP_BOVText_vit.yaml \
     --vts-model ./GoMatching/models/GoMatching_pp_vitaeb_bovtext.pth \
     --video-dir path/datasets/M4-ViteVQA/video/ \
-    --output ./results/mot.json
+    --output ./results/mot.json \
+    --use-ocr-text \
+    --max-ocr-chars 500

@@ -4,7 +4,7 @@ import json
 import os
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
-from qwen_vison_process import process_vision_info, init_ocrmodel, set_key_conf
+from qwen_vison_process import process_vision_info, init_ocrmodel, set_key_conf, format_ocr_prompt
 from metric import anls_metric, stvqa_acc_metric
 import codecs
 from tqdm import tqdm
@@ -24,6 +24,11 @@ def get_parser():
     parser.add_argument("--vts-model", help="VTS model path")
     parser.add_argument("--video-dir", help="input video dir path")
     parser.add_argument("--output", help="output json path")
+    parser.add_argument("--use-ocr-text", action="store_true", default=True, help="inject OCR text into VLM prompt")
+    parser.add_argument("--no-ocr-text", dest="use_ocr_text", action="store_false", help="disable OCR text injection")
+    parser.add_argument("--max-ocr-chars", type=int, default=500, help="max chars for OCR text in prompt")
+    parser.add_argument("--use-focus-bonus", action="store_true", default=True, help="text matching bonus in Focus stage")
+    parser.add_argument("--no-focus-bonus", dest="use_focus_bonus", action="store_false", help="disable Focus text matching bonus")
     return parser
 
 if __name__ == "__main__":
@@ -32,7 +37,7 @@ if __name__ == "__main__":
 
     save_json = args.output
 
-    set_key_conf(w_size=WIN_SIZE, thrd=THRESHOLD)
+    set_key_conf(w_size=WIN_SIZE, thrd=THRESHOLD, focus_bonus=args.use_focus_bonus)
 
     anls_metr = anls_metric.ANLS_metric()
     stvqa_acc_metr = stvqa_acc_metric.STVQAAcc_metric()
@@ -96,8 +101,18 @@ if __name__ == "__main__":
             },
         ]
 
+        image_inputs, video_inputs, video_kwargs, all_text_lists = process_vision_info(question, conversation, return_video_kwargs=True)
+
+        # rebuild prompt with OCR text if available
+        ocr_prefix = ''
+        if args.use_ocr_text and all_text_lists:
+            for tl in all_text_lists:
+                ocr_prefix += format_ocr_prompt(tl, max_chars=args.max_ocr_chars)
+        if ocr_prefix:
+            promt = ocr_prefix + promt
+            conversation[1]["content"][-1]["text"] = promt
+
         text = processor.apply_chat_template(conversation, tokenize=False, add_generation_prompt=True)
-        image_inputs, video_inputs, video_kwargs = process_vision_info(question, conversation, return_video_kwargs=True)
         inputs = processor(
             text=[text],
             images=image_inputs,
