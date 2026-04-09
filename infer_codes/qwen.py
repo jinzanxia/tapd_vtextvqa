@@ -4,7 +4,7 @@ import json
 import os
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
-from qwen_vison_process import process_vision_info, init_ocrmodel, set_key_conf, format_ocr_prompt, should_inject_ocr
+from qwen_vison_process import process_vision_info, init_ocrmodel, set_key_conf, format_ocr_prompt, should_inject_ocr, collect_ocr_texts, ocr_post_correct
 from metric import anls_metric, stvqa_acc_metric
 import codecs
 from tqdm import tqdm
@@ -32,6 +32,10 @@ def get_parser():
     parser.add_argument("--ocr-min-freq", type=int, default=2, help="min frames a text must appear in")
     parser.add_argument("--use-focus-bonus", action="store_true", default=True, help="text matching bonus in Focus stage")
     parser.add_argument("--no-focus-bonus", dest="use_focus_bonus", action="store_false", help="disable Focus text matching bonus")
+    parser.add_argument("--ocr-post-correct", action="store_true", default=False, help="post-correct VLM answer using OCR edit distance")
+    parser.add_argument("--ocr-pc-max-edit", type=int, default=2, help="max edit distance for OCR post-correction")
+    parser.add_argument("--ocr-pc-top-k", type=int, default=20, help="top-k OCR texts for post-correction pool")
+    parser.add_argument("--ocr-pc-min-freq", type=int, default=1, help="min frame freq for post-correction OCR pool")
     return parser
 
 if __name__ == "__main__":
@@ -141,6 +145,15 @@ if __name__ == "__main__":
         response = response.replace("Answer:", "").strip()
         if response.endswith('.'):
             response = response[:-1]
+
+        if args.ocr_post_correct and all_text_lists:
+            ocr_pool = []
+            for tl in all_text_lists:
+                ocr_pool.extend(collect_ocr_texts(tl, top_k=args.ocr_pc_top_k, min_freq=args.ocr_pc_min_freq))
+            original = response
+            response = ocr_post_correct(response, ocr_pool, max_edit_dist=args.ocr_pc_max_edit)
+            if response != original:
+                print(f'[OCR CORRECT] "{original}" -> "{response}"')
 
         p_ann = {'video_id': vid, 'answer': response}
         pred_ans[qid] = p_ann

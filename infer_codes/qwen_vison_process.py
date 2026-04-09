@@ -135,6 +135,46 @@ def format_ocr_prompt(text_lists, max_chars=500, top_k=5, min_freq=2):
     return f'Hint: the video may contain these texts: {text_str}\n'
 
 
+def collect_ocr_texts(text_lists, top_k=20, min_freq=1):
+    """Return deduplicated OCR texts sorted by frame frequency (descending)."""
+    text_counts = defaultdict(int)
+    for frame_texts in text_lists:
+        frame_seen = set()
+        for t in frame_texts:
+            t_stripped = t.strip()
+            if len(t_stripped) >= 2 and t_stripped not in frame_seen:
+                frame_seen.add(t_stripped)
+                text_counts[t_stripped] += 1
+    if not text_counts:
+        return []
+    reliable = {t: c for t, c in text_counts.items() if c >= min_freq}
+    if not reliable:
+        reliable = text_counts
+    return sorted(reliable.keys(), key=lambda x: reliable[x], reverse=True)[:top_k]
+
+
+def ocr_post_correct(vlm_answer, ocr_texts, max_edit_dist=2):
+    """Post-correct VLM answer by matching against OCR texts via edit distance.
+
+    Only replaces when VLM answer is close-but-not-identical to an OCR text.
+    """
+    import editdistance
+    if not ocr_texts or not vlm_answer:
+        return vlm_answer
+    vlm_lower = vlm_answer.lower().strip()
+    best_match, best_dist = None, float('inf')
+    for t in ocr_texts:
+        d = editdistance.eval(vlm_lower, t.lower().strip())
+        if d < best_dist:
+            best_dist = d
+            best_match = t
+    # dynamic threshold: allow ~20% difference, at least max_edit_dist
+    threshold = max(max_edit_dist, len(vlm_lower) // 5)
+    if 0 < best_dist <= threshold:
+        return best_match
+    return vlm_answer
+
+
 def setup_cfg(cfg_path, model_path, device):
     global CTLABELS, voc_size
     cfg = get_cfg()
