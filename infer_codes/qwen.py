@@ -4,7 +4,7 @@ import json
 import os
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
-from qwen_vison_process import process_vision_info, init_ocrmodel, set_key_conf, format_ocr_prompt
+from qwen_vison_process import process_vision_info, init_ocrmodel, set_key_conf, format_ocr_prompt, should_inject_ocr
 from metric import anls_metric, stvqa_acc_metric
 import codecs
 from tqdm import tqdm
@@ -26,6 +26,7 @@ def get_parser():
     parser.add_argument("--output", help="output json path")
     parser.add_argument("--use-ocr-text", action="store_true", default=True, help="inject OCR text into VLM prompt")
     parser.add_argument("--no-ocr-text", dest="use_ocr_text", action="store_false", help="disable OCR text injection")
+    parser.add_argument("--conditional-ocr", action="store_true", default=False, help="only inject OCR for text/number questions")
     parser.add_argument("--max-ocr-chars", type=int, default=500, help="max chars for OCR text in prompt")
     parser.add_argument("--ocr-top-k", type=int, default=5, help="keep top-k most frequent OCR texts")
     parser.add_argument("--ocr-min-freq", type=int, default=2, help="min frames a text must appear in")
@@ -107,7 +108,8 @@ if __name__ == "__main__":
 
         # rebuild prompt with OCR text if available
         ocr_prefix = ''
-        if args.use_ocr_text and all_text_lists:
+        inject = args.use_ocr_text and (not args.conditional_ocr or should_inject_ocr(question))
+        if inject and all_text_lists:
             for tl in all_text_lists:
                 ocr_prefix += format_ocr_prompt(tl, max_chars=args.max_ocr_chars, top_k=args.ocr_top_k, min_freq=args.ocr_min_freq)
         if ocr_prefix:

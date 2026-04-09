@@ -67,6 +67,39 @@ def set_key_conf(w_size=0.6, thrd=0.7, focus_bonus=True):
     use_focus_bonus = focus_bonus
 
 
+def should_inject_ocr(question):
+    """Decide whether OCR text is likely useful for this question.
+
+    Returns True for text/number-reading questions, False for purely visual ones.
+    """
+    ql = question.lower()
+    # positive signals: question asks about text, numbers, labels, etc.
+    inject_kw = [
+        'written', 'write', 'text', 'word', 'brand', 'name of', 'named',
+        'title', 'say', 'said', 'read', 'spell', 'letter', 'sign', 'label',
+        'slogan', 'logo', 'called', 'message', 'headline', 'caption',
+        'price', 'cost', 'number', 'how much', 'how many', 'score',
+        'total', 'amount', 'plate', 'date', 'time', 'year', 'floor',
+        'channel', 'speed', 'limit', 'billboard', 'banner', 'display',
+        'screen', 'subtitle', 'section', 'line of', 'shown', 'printed',
+        'team', 'play for', 'result', 'input', 'enter',
+    ]
+    # negative signals: purely visual questions
+    reject_kw = [
+        'color', 'colour', 'wear', 'wearing', 'look like', 'looks like',
+        'expression', 'emotion', 'feeling', 'gesture', 'posture',
+        'how old', 'tall', 'shape',
+    ]
+    for kw in reject_kw:
+        if kw in ql:
+            return False
+    for kw in inject_kw:
+        if kw in ql:
+            return True
+    # default: inject (more questions benefit from OCR than not)
+    return True
+
+
 def format_ocr_prompt(text_lists, max_chars=500, top_k=5, min_freq=2):
     """Format OCR text from all frames into a deduplicated prompt string.
     
