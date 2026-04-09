@@ -107,10 +107,12 @@ if __name__ == "__main__":
         ocr_prefix = ''
         if args.use_ocr_text and all_text_lists:
             for tl in all_text_lists:
-                ocr_prefix += format_ocr_prompt(tl, max_chars=args.max_ocr_chars)
+                ocr_prefix += format_ocr_prompt(tl, max_chars=args.max_ocr_chars, question=question)
         if ocr_prefix:
             promt = ocr_prefix + promt
             conversation[1]["content"][-1]["text"] = promt
+            print(f'[OCR DEBUG] Q: {question}')
+            print(f'[OCR DEBUG] OCR prefix: {ocr_prefix.strip()}')
 
         text = processor.apply_chat_template(conversation, tokenize=False, add_generation_prompt=True)
         inputs = processor(

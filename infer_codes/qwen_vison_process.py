@@ -67,26 +67,37 @@ def set_key_conf(w_size=0.6, thrd=0.7, focus_bonus=True):
     use_focus_bonus = focus_bonus
 
 
-def format_ocr_prompt(text_lists, max_chars=500):
+def format_ocr_prompt(text_lists, max_chars=500, question=None):
     """Format OCR text from all frames into a deduplicated prompt string.
     
     Args:
         text_lists: list[list[str]], OCR texts per frame from ocr_det_with_text()
         max_chars: maximum characters for the OCR portion of the prompt
+        question: optional question string for relevance filtering
     Returns:
         str: formatted prompt string, empty string if no valid text found
     """
-    seen = set()
-    unique_texts = []
+    # count occurrences across frames as a proxy for confidence
+    text_counts = defaultdict(int)
     for frame_texts in text_lists:
+        frame_seen = set()
         for t in frame_texts:
             t_stripped = t.strip()
-            if len(t_stripped) > 1 and t_stripped not in seen:
-                seen.add(t_stripped)
-                unique_texts.append(t_stripped)
-    if not unique_texts:
+            if len(t_stripped) >= 3 and t_stripped not in frame_seen:
+                frame_seen.add(t_stripped)
+                text_counts[t_stripped] += 1
+    if not text_counts:
         return ''
-    text_str = ', '.join(f'"{t}"' for t in unique_texts)
+    # sort by frequency (more frames = more reliable)
+    sorted_texts = sorted(text_counts.keys(), key=lambda x: text_counts[x], reverse=True)
+    # if question provided, try to prioritize relevant texts
+    if question:
+        q_lower = question.lower()
+        q_words = [w for w in q_lower.split() if len(w) > 2]
+        relevant = [t for t in sorted_texts if any(qw in t.lower() for qw in q_words)]
+        others = [t for t in sorted_texts if t not in set(relevant)]
+        sorted_texts = relevant + others
+    text_str = ', '.join(f'"{t}"' for t in sorted_texts)
     if len(text_str) > max_chars:
         text_str = text_str[:max_chars].rsplit(',', 1)[0]
     return f'The following text was detected in the video (may contain OCR errors): {text_str}\n'
