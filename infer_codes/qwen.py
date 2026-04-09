@@ -27,6 +27,8 @@ def get_parser():
     parser.add_argument("--use-ocr-text", action="store_true", default=True, help="inject OCR text into VLM prompt")
     parser.add_argument("--no-ocr-text", dest="use_ocr_text", action="store_false", help="disable OCR text injection")
     parser.add_argument("--max-ocr-chars", type=int, default=500, help="max chars for OCR text in prompt")
+    parser.add_argument("--ocr-top-k", type=int, default=5, help="keep top-k most frequent OCR texts")
+    parser.add_argument("--ocr-min-freq", type=int, default=2, help="min frames a text must appear in")
     parser.add_argument("--use-focus-bonus", action="store_true", default=True, help="text matching bonus in Focus stage")
     parser.add_argument("--no-focus-bonus", dest="use_focus_bonus", action="store_false", help="disable Focus text matching bonus")
     return parser
@@ -107,7 +109,7 @@ if __name__ == "__main__":
         ocr_prefix = ''
         if args.use_ocr_text and all_text_lists:
             for tl in all_text_lists:
-                ocr_prefix += format_ocr_prompt(tl, max_chars=args.max_ocr_chars, question=question)
+                ocr_prefix += format_ocr_prompt(tl, max_chars=args.max_ocr_chars, top_k=args.ocr_top_k, min_freq=args.ocr_min_freq)
         if ocr_prefix:
             promt = ocr_prefix + promt
             conversation[1]["content"][-1]["text"] = promt

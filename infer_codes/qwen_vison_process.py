@@ -67,13 +67,14 @@ def set_key_conf(w_size=0.6, thrd=0.7, focus_bonus=True):
     use_focus_bonus = focus_bonus
 
 
-def format_ocr_prompt(text_lists, max_chars=500, question=None):
+def format_ocr_prompt(text_lists, max_chars=500, top_k=5, min_freq=2):
     """Format OCR text from all frames into a deduplicated prompt string.
     
     Args:
         text_lists: list[list[str]], OCR texts per frame from ocr_det_with_text()
         max_chars: maximum characters for the OCR portion of the prompt
-        question: optional question string for relevance filtering
+        top_k: keep only the top-k most frequent texts
+        min_freq: minimum number of frames a text must appear in
     Returns:
         str: formatted prompt string, empty string if no valid text found
     """
@@ -88,19 +89,17 @@ def format_ocr_prompt(text_lists, max_chars=500, question=None):
                 text_counts[t_stripped] += 1
     if not text_counts:
         return ''
-    # sort by frequency (more frames = more reliable)
-    sorted_texts = sorted(text_counts.keys(), key=lambda x: text_counts[x], reverse=True)
-    # if question provided, try to prioritize relevant texts
-    if question:
-        q_lower = question.lower()
-        q_words = [w for w in q_lower.split() if len(w) > 2]
-        relevant = [t for t in sorted_texts if any(qw in t.lower() for qw in q_words)]
-        others = [t for t in sorted_texts if t not in set(relevant)]
-        sorted_texts = relevant + others
+    # frequency filter: only keep texts appearing in >= min_freq frames
+    reliable = {t: c for t, c in text_counts.items() if c >= min_freq}
+    if not reliable:
+        # fallback: keep all if nothing survives the threshold
+        reliable = text_counts
+    # sort by frequency (descending) and take top-k
+    sorted_texts = sorted(reliable.keys(), key=lambda x: reliable[x], reverse=True)[:top_k]
     text_str = ', '.join(f'"{t}"' for t in sorted_texts)
     if len(text_str) > max_chars:
         text_str = text_str[:max_chars].rsplit(',', 1)[0]
-    return f'The following text was detected in the video (may contain OCR errors): {text_str}\n'
+    return f'Hint: the video may contain these texts: {text_str}\n'
 
 
 def setup_cfg(cfg_path, model_path, device):

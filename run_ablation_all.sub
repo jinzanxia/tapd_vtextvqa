@@ -6,7 +6,7 @@
 #SBATCH --ntasks-per-node=1
 #SBATCH --mem=80G
 #SBATCH --time=48:00:00
-#SBATCH --array=0-3
+#SBATCH --array=0-5
 #SBATCH -o ./logs/ablation_%a.%N.%j.out
 #SBATCH -e ./logs/ablation_%a.%N.%j.err
 
@@ -24,30 +24,39 @@ VTS_MODEL="${DATA_DIR}/GoMatching_pp_vitaeb_bovtext.pth"
 mkdir -p ./logs ./results
 
 # ===== Ablation experiment definitions =====
-# Array index → experiment config
-#   0: A — Baseline (no OCR text, original SFA)
-#   1: B — + OCR text injected into prompt
-#   2: C — + OCR text + Focus text matching bonus
-#   3: D — No OCR text but with Focus text matching bonus only
+#   0: A — Baseline (no OCR, no Focus bonus)
+#   1: B — OCR top-5 freq>=2 + hint prompt (no Focus bonus)
+#   2: C — OCR top-3 freq>=3 + hint prompt (no Focus bonus, stricter filter)
+#   3: D — OCR top-10 freq>=1 + hint prompt (no Focus bonus, loose filter)
+#   4: E — Focus bonus only (no OCR text)
+#   5: F — OCR top-5 freq>=2 + Focus bonus (full pipeline)
 
-EXPERIMENT_NAMES=("baseline" "ocr_text" "focus_bonus" "ocr_text_focus_bonus")
+EXPERIMENT_NAMES=("baseline" "ocr_top5_freq2" "ocr_top3_freq3" "ocr_top10_freq1" "focus_bonus" "ocr_top5_freq2_focus")
 
 case ${SLURM_ARRAY_TASK_ID} in
   0)
-    # A: Baseline — no OCR text, no Focus bonus (original SFA)
+    # A: Baseline — original SFA
     EXTRA_ARGS="--no-ocr-text --no-focus-bonus"
     ;;
   1)
-    # B: OCR text in prompt only (no Focus bonus)
-    EXTRA_ARGS="--use-ocr-text --max-ocr-chars 500 --no-focus-bonus"
+    # B: OCR top-5, freq>=2 (default)
+    EXTRA_ARGS="--use-ocr-text --ocr-top-k 5 --ocr-min-freq 2 --no-focus-bonus"
     ;;
   2)
-    # C: Focus bonus only (no OCR text in prompt)
-    EXTRA_ARGS="--no-ocr-text --use-focus-bonus"
+    # C: OCR top-3, freq>=3 (stricter)
+    EXTRA_ARGS="--use-ocr-text --ocr-top-k 3 --ocr-min-freq 3 --no-focus-bonus"
     ;;
   3)
-    # D: OCR text + Focus bonus (full new pipeline)
-    EXTRA_ARGS="--use-ocr-text --max-ocr-chars 500 --use-focus-bonus"
+    # D: OCR top-10, freq>=1 (loose, for comparison)
+    EXTRA_ARGS="--use-ocr-text --ocr-top-k 10 --ocr-min-freq 1 --no-focus-bonus"
+    ;;
+  4)
+    # E: Focus bonus only
+    EXTRA_ARGS="--no-ocr-text --use-focus-bonus"
+    ;;
+  5)
+    # F: OCR top-5 freq>=2 + Focus bonus
+    EXTRA_ARGS="--use-ocr-text --ocr-top-k 5 --ocr-min-freq 2 --use-focus-bonus"
     ;;
 esac
 
