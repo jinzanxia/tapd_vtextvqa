@@ -60,11 +60,12 @@ logger.info(f"set VIDEO_TOTAL_PIXELS: {VIDEO_TOTAL_PIXELS}")
 ### key frame zoom select
 a_token_id = 32 ### 'A' token id
 
-def set_key_conf(w_size=0.6, thrd=0.7, focus_bonus=True):
-    global win_size, threshold, use_focus_bonus
+def set_key_conf(w_size=0.6, thrd=0.7, focus_bonus=True, layout_zoom='off'):
+    global win_size, threshold, use_focus_bonus, use_layout_zoom
     win_size = w_size
     threshold = thrd
     use_focus_bonus = focus_bonus
+    use_layout_zoom = layout_zoom
 
 
 def should_inject_ocr(question):
@@ -292,7 +293,7 @@ def ocr_det_with_text(video):
     return box_list, text_list
     
 def select_key_zoom(text_boxes_list, video, question, text_list=None):
-    global vlm_model, vlm_processor, threshold, win_size, use_focus_bonus
+    global vlm_model, vlm_processor, threshold, win_size, use_focus_bonus, use_layout_zoom
     h, w = video.shape[1:3]
     aspect_ratio = w / h
     key_frame_zoom = []
@@ -325,6 +326,23 @@ def select_key_zoom(text_boxes_list, video, question, text_list=None):
         (w - win_w, 0),
         (0, h - win_h),
         (w - win_w, h - win_h)]
+
+        # layout-guided: add text-centered crops based on bbox positions
+        if use_layout_zoom != 'off' and text_boxes:
+            # text centroid crop
+            cx = int(np.mean([(b[0] + b[2]) / 2 for b in text_boxes]))
+            cy = int(np.mean([(b[1] + b[3]) / 2 for b in text_boxes]))
+            sx = max(0, min(cx - win_w // 2, w - win_w))
+            sy = max(0, min(cy - win_h // 2, h - win_h))
+            if (sx, sy) not in start_coords:
+                start_coords.append((sx, sy))
+            # frame center crop (only in 'full' mode)
+            if use_layout_zoom == 'full':
+                csx = max(0, (w - win_w) // 2)
+                csy = max(0, (h - win_h) // 2)
+                if (csx, csy) not in start_coords:
+                    start_coords.append((csx, csy))
+
         sub_imgs = []
         inf_imgs = []
         conversations = []
