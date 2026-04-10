@@ -6,7 +6,7 @@
 #SBATCH --ntasks-per-node=1
 #SBATCH --mem=80G
 #SBATCH --time=48:00:00
-#SBATCH --array=0-5
+#SBATCH --array=0-6
 #SBATCH -o ./logs/density_%a.%N.%j.out
 #SBATCH -e ./logs/density_%a.%N.%j.err
 
@@ -30,8 +30,9 @@ mkdir -p ./logs ./results
 #   3: D — Density mode, top_k=6, nms=0.5
 #   4: E — Density mode, top_k=4, nms=0.3
 #   5: F — Density mode, top_k=4, nms=0.5 + layout_full fallback
+#   6: G — Density mode, top_k=4, nms=0.5 + frame center fallback
 
-EXPERIMENT_NAMES=("baseline" "layout_full" "density_k4_n05" "density_k6_n05" "density_k4_n03" "density_k4_layout_full")
+EXPERIMENT_NAMES=("baseline" "layout_full" "density_k4_n05" "density_k6_n05" "density_k4_n03" "density_k4_layout_full" "density_k4_layout_center")
 
 case ${SLURM_ARRAY_TASK_ID} in
   0)
@@ -57,6 +58,10 @@ case ${SLURM_ARRAY_TASK_ID} in
   5)
     # F: Density mode + layout_full fallback (density when text_boxes, else fixed+layout)
     EXTRA_ARGS="--no-ocr-text --no-focus-bonus --layout-zoom full --crop-mode density --density-top-k 4 --density-nms 0.5"
+    ;;
+  6)
+    # G: Density mode + frame center fallback (density when text_boxes, else fixed+center)
+    EXTRA_ARGS="--no-ocr-text --no-focus-bonus --layout-zoom center --crop-mode density --density-top-k 4 --density-nms 0.5"
     ;;
 esac
 
