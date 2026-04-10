@@ -61,9 +61,11 @@ logger.info(f"set VIDEO_TOTAL_PIXELS: {VIDEO_TOTAL_PIXELS}")
 a_token_id = 32 ### 'A' token id
 
 def set_key_conf(w_size=0.6, thrd=0.7, focus_bonus=True, layout_zoom='off',
-                 kf_sample='off', kf_n_segments=8, kf_neighbors=1):
+                 kf_sample='off', kf_n_segments=8, kf_neighbors=1,
+                 crop_mode='fixed', density_top_k=4, density_nms=0.5):
     global win_size, threshold, use_focus_bonus, use_layout_zoom
     global kf_sample_mode, kf_n_seg, kf_k
+    global g_crop_mode, g_density_top_k, g_density_nms
     win_size = w_size
     threshold = thrd
     use_focus_bonus = focus_bonus
@@ -71,6 +73,9 @@ def set_key_conf(w_size=0.6, thrd=0.7, focus_bonus=True, layout_zoom='off',
     kf_sample_mode = kf_sample
     kf_n_seg = kf_n_segments
     kf_k = kf_neighbors
+    g_crop_mode = crop_mode
+    g_density_top_k = density_top_k
+    g_density_nms = density_nms
 
 
 def keyframe_sample(video):
@@ -338,8 +343,95 @@ def ocr_det_with_text(video):
     
     return box_list, text_list
     
+def text_density_proposals(text_boxes, h, w, win_sizes, top_k=4, nms_thresh=0.5, stride_ratio=0.25):
+    """Generate crop proposals ranked by text density using bbox-based heatmap.
+
+    Args:
+        text_boxes: list of [x1, y1, x2, y2] bboxes from GoMatching
+        h, w: frame dimensions
+        win_sizes: list of (win_w, win_h) tuples to try
+        top_k: max proposals after NMS
+        nms_thresh: IoU threshold for NMS
+        stride_ratio: stride as fraction of window size
+    Returns:
+        list of (sx, sy, win_w, win_h) proposals sorted by score descending
+    """
+    if not text_boxes:
+        return []
+
+    # build density map at 1/4 resolution for speed
+    scale = 4
+    dh, dw = h // scale, w // scale
+    density = np.zeros((dh, dw), dtype=np.float32)
+    for bx1, by1, bx2, by2 in text_boxes:
+        y1d = max(0, int(by1 / scale))
+        y2d = min(dh, int(by2 / scale))
+        x1d = max(0, int(bx1 / scale))
+        x2d = min(dw, int(bx2 / scale))
+        if y2d > y1d and x2d > x1d:
+            density[y1d:y2d, x1d:x2d] += 1.0
+
+    # integral image for fast window sum
+    integral = np.zeros((dh + 1, dw + 1), dtype=np.float64)
+    integral[1:, 1:] = np.cumsum(np.cumsum(density, axis=0), axis=1)
+
+    def window_sum(y1, x1, y2, x2):
+        return integral[y2, x2] - integral[y1, x2] - integral[y2, x1] + integral[y1, x1]
+
+    # slide windows at multiple scales
+    candidates = []  # (score, sx, sy, win_w, win_h)
+    for ww, wh in win_sizes:
+        dww, dwh = ww // scale, wh // scale
+        if dww < 1 or dwh < 1:
+            continue
+        stride_x = max(1, int(dww * stride_ratio))
+        stride_y = max(1, int(dwh * stride_ratio))
+        for dy in range(0, dh - dwh + 1, stride_y):
+            for dx in range(0, dw - dww + 1, stride_x):
+                s = window_sum(dy, dx, dy + dwh, dx + dww)
+                if s > 0:
+                    candidates.append((s, dx * scale, dy * scale, ww, wh))
+
+    if not candidates:
+        return []
+
+    # sort by score descending
+    candidates.sort(key=lambda x: x[0], reverse=True)
+
+    # NMS
+    def iou(a, b):
+        ax1, ay1 = a[1], a[2]
+        ax2, ay2 = a[1] + a[3], a[2] + a[4]
+        bx1, by1 = b[1], b[2]
+        bx2, by2 = b[1] + b[3], b[2] + b[4]
+        ix1, iy1 = max(ax1, bx1), max(ay1, by1)
+        ix2, iy2 = min(ax2, bx2), min(ay2, by2)
+        inter = max(0, ix2 - ix1) * max(0, iy2 - iy1)
+        area_a = (ax2 - ax1) * (ay2 - ay1)
+        area_b = (bx2 - bx1) * (by2 - by1)
+        union = area_a + area_b - inter
+        return inter / union if union > 0 else 0
+
+    kept = []
+    for c in candidates:
+        if all(iou(c, k) < nms_thresh for k in kept):
+            kept.append(c)
+        if len(kept) >= top_k:
+            break
+
+    # convert to (sx, sy, win_w, win_h), clamp to frame
+    proposals = []
+    for _, sx, sy, ww, wh in kept:
+        sx = max(0, min(sx, w - ww))
+        sy = max(0, min(sy, h - wh))
+        proposals.append((sx, sy, ww, wh))
+
+    return proposals
+
+
 def select_key_zoom(text_boxes_list, video, question, text_list=None):
     global vlm_model, vlm_processor, threshold, win_size, use_focus_bonus, use_layout_zoom
+    global g_crop_mode, g_density_top_k, g_density_nms
     h, w = video.shape[1:3]
     aspect_ratio = w / h
     key_frame_zoom = []
@@ -367,6 +459,43 @@ def select_key_zoom(text_boxes_list, video, question, text_list=None):
             if any(qw in frame_text_lower for qw in question_lower if len(qw) > 2):
                 text_bonus = 0.15
         win_w, win_h = int(win_size * w), int(win_size * h)
+
+        if g_crop_mode == 'density' and text_boxes:
+            # text-density-aware region proposals
+            win_sizes = [
+                (int(0.4 * w), int(0.4 * h)),
+                (int(0.6 * w), int(0.6 * h)),
+                (int(0.8 * w), int(0.8 * h)),
+            ]
+            proposals = text_density_proposals(
+                text_boxes, h, w, win_sizes,
+                top_k=g_density_top_k, nms_thresh=g_density_nms)
+            if proposals:
+                # use variable-size proposals
+                sub_imgs = []
+                inf_imgs = []
+                conversations = []
+                for sx, sy, pw, ph in proposals:
+                    cropped_img = Image.fromarray(frame[sy:sy+ph, sx:sx+pw])
+                    sub_imgs.append(cropped_img)
+                    cropped_img = cropped_img.resize((win_w, win_h))
+                    inf_imgs.append(cropped_img)
+                    conversations.append(conversation)
+
+                if len(sub_imgs) > 0:
+                    text_prompt = vlm_processor.apply_chat_template(conversations, add_generation_prompt=True)
+                    inputs = vlm_processor(text=text_prompt, images=inf_imgs, padding=True, return_tensors="pt").to(vlm_model.device)
+                    with torch.no_grad():
+                        outputs = vlm_model(**inputs)
+                        logits = outputs.logits[:, -1, :]
+                        a_probabilities = torch.nn.functional.softmax(logits, dim=-1)[:, a_token_id]
+                        a_probabilities = a_probabilities + text_bonus
+                        max_val, max_id = torch.max(a_probabilities, dim=0)
+                        if max_val > threshold:
+                            key_frame_zoom.append(np.array(sub_imgs[max_id].resize((w, h))))
+                continue  # skip fixed-corner logic for this frame
+
+        # fixed corner crops (original logic)
         start_coords = [
         (0, 0),
         (w - win_w, 0),
