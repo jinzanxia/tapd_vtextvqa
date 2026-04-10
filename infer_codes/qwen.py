@@ -34,6 +34,10 @@ def get_parser():
     parser.add_argument("--no-focus-bonus", dest="use_focus_bonus", action="store_false", help="disable Focus text matching bonus")
     parser.add_argument("--layout-zoom", type=str, default="off", choices=["off", "centroid", "center", "full"],
                         help="layout-guided zoom mode: off, centroid (text centroid only), center (frame center only), full (centroid + frame center)")
+    parser.add_argument("--kf-sample", type=str, default="off", choices=["off", "center", "sharpness", "random"],
+                        help="keyframe pre-sampling mode: off, center, sharpness (Laplacian), random")
+    parser.add_argument("--kf-segments", type=int, default=8, help="number of temporal segments for keyframe sampling")
+    parser.add_argument("--kf-neighbors", type=int, default=1, help="neighbor expansion radius k around each keyframe")
     parser.add_argument("--ocr-post-correct", action="store_true", default=False, help="post-correct VLM answer using OCR edit distance")
     parser.add_argument("--ocr-pc-max-edit", type=int, default=2, help="max edit distance for OCR post-correction")
     parser.add_argument("--ocr-pc-top-k", type=int, default=20, help="top-k OCR texts for post-correction pool")
@@ -46,7 +50,8 @@ if __name__ == "__main__":
 
     save_json = args.output
 
-    set_key_conf(w_size=WIN_SIZE, thrd=THRESHOLD, focus_bonus=args.use_focus_bonus, layout_zoom=args.layout_zoom)
+    set_key_conf(w_size=WIN_SIZE, thrd=THRESHOLD, focus_bonus=args.use_focus_bonus, layout_zoom=args.layout_zoom,
+                 kf_sample=args.kf_sample, kf_n_segments=args.kf_segments, kf_neighbors=args.kf_neighbors)
 
     anls_metr = anls_metric.ANLS_metric()
     stvqa_acc_metr = stvqa_acc_metric.STVQAAcc_metric()

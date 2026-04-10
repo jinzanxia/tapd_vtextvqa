@@ -60,12 +60,58 @@ logger.info(f"set VIDEO_TOTAL_PIXELS: {VIDEO_TOTAL_PIXELS}")
 ### key frame zoom select
 a_token_id = 32 ### 'A' token id
 
-def set_key_conf(w_size=0.6, thrd=0.7, focus_bonus=True, layout_zoom='off'):
+def set_key_conf(w_size=0.6, thrd=0.7, focus_bonus=True, layout_zoom='off',
+                 kf_sample='off', kf_n_segments=8, kf_neighbors=1):
     global win_size, threshold, use_focus_bonus, use_layout_zoom
+    global kf_sample_mode, kf_n_seg, kf_k
     win_size = w_size
     threshold = thrd
     use_focus_bonus = focus_bonus
     use_layout_zoom = layout_zoom
+    kf_sample_mode = kf_sample
+    kf_n_seg = kf_n_segments
+    kf_k = kf_neighbors
+
+
+def keyframe_sample(video):
+    """Pre-filter frames via temporal segmentation + sharpness-based selection.
+
+    Returns indices of selected frames.
+    """
+    T = video.shape[0]
+    if T <= kf_n_seg:
+        return list(range(T))
+
+    seg_len = T / kf_n_seg
+    representatives = []
+
+    for i in range(kf_n_seg):
+        start = int(i * seg_len)
+        end = min(int((i + 1) * seg_len), T)
+
+        if kf_sample_mode == 'center':
+            t_i = (start + end) // 2
+        elif kf_sample_mode == 'sharpness':
+            best_score, best_idx = -1, start
+            for idx in range(start, end):
+                gray = cv2.cvtColor(video[idx], cv2.COLOR_RGB2GRAY)
+                score = cv2.Laplacian(gray, cv2.CV_64F).var()
+                if score > best_score:
+                    best_score = score
+                    best_idx = idx
+            t_i = best_idx
+        else:  # 'random'
+            t_i = random.randint(start, end - 1)
+
+        representatives.append(t_i)
+
+    # neighbor expansion
+    selected = set()
+    for t_i in representatives:
+        for offset in range(-kf_k, kf_k + 1):
+            selected.add(max(0, min(T - 1, t_i + offset)))
+
+    return sorted(selected)
 
 
 def should_inject_ocr(question):
@@ -705,8 +751,16 @@ def fetch_video(ele: dict, question: str, image_factor: int = IMAGE_FACTOR, retu
             logger.warning(f"video_reader_backend {video_reader_backend} error, use torchvision as default, msg: {e}")
             video, sample_fps = VIDEO_READER_BACKENDS["torchvision"](ele)
         
-        text_boxes_list, text_list = ocr_det_with_text(video)
-        key_frame_zoom = select_key_zoom(text_boxes_list, video, question, text_list=text_list)
+        # optional keyframe pre-sampling
+        if kf_sample_mode != 'off':
+            kf_indices = keyframe_sample(video)
+            video_sampled = video[kf_indices]
+            print(f'[KF SAMPLE] {video.shape[0]} frames -> {len(kf_indices)} frames (mode={kf_sample_mode}, N={kf_n_seg}, k={kf_k})')
+        else:
+            video_sampled = video
+
+        text_boxes_list, text_list = ocr_det_with_text(video_sampled)
+        key_frame_zoom = select_key_zoom(text_boxes_list, video_sampled, question, text_list=text_list)
         
         oframes = video.shape[0]
         all_oframes += oframes
