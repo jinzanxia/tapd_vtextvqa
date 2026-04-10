@@ -329,15 +329,16 @@ def select_key_zoom(text_boxes_list, video, question, text_list=None):
 
         # layout-guided: add text-centered crops based on bbox positions
         if use_layout_zoom != 'off' and text_boxes:
-            # text centroid crop
-            cx = int(np.mean([(b[0] + b[2]) / 2 for b in text_boxes]))
-            cy = int(np.mean([(b[1] + b[3]) / 2 for b in text_boxes]))
-            sx = max(0, min(cx - win_w // 2, w - win_w))
-            sy = max(0, min(cy - win_h // 2, h - win_h))
-            if (sx, sy) not in start_coords:
-                start_coords.append((sx, sy))
-            # frame center crop (only in 'full' mode)
-            if use_layout_zoom == 'full':
+            # text centroid crop (centroid / full mode)
+            if use_layout_zoom in ('centroid', 'full'):
+                cx = int(np.mean([(b[0] + b[2]) / 2 for b in text_boxes]))
+                cy = int(np.mean([(b[1] + b[3]) / 2 for b in text_boxes]))
+                sx = max(0, min(cx - win_w // 2, w - win_w))
+                sy = max(0, min(cy - win_h // 2, h - win_h))
+                if (sx, sy) not in start_coords:
+                    start_coords.append((sx, sy))
+            # frame center crop (center / full mode)
+            if use_layout_zoom in ('center', 'full'):
                 csx = max(0, (w - win_w) // 2)
                 csy = max(0, (h - win_h) // 2)
                 if (csx, csy) not in start_coords:

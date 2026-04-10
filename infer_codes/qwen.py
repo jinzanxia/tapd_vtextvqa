@@ -32,8 +32,8 @@ def get_parser():
     parser.add_argument("--ocr-min-freq", type=int, default=2, help="min frames a text must appear in")
     parser.add_argument("--use-focus-bonus", action="store_true", default=True, help="text matching bonus in Focus stage")
     parser.add_argument("--no-focus-bonus", dest="use_focus_bonus", action="store_false", help="disable Focus text matching bonus")
-    parser.add_argument("--layout-zoom", type=str, default="off", choices=["off", "centroid", "full"],
-                        help="layout-guided zoom mode: off, centroid (text centroid only), full (centroid + frame center)")
+    parser.add_argument("--layout-zoom", type=str, default="off", choices=["off", "centroid", "center", "full"],
+                        help="layout-guided zoom mode: off, centroid (text centroid only), center (frame center only), full (centroid + frame center)")
     parser.add_argument("--ocr-post-correct", action="store_true", default=False, help="post-correct VLM answer using OCR edit distance")
     parser.add_argument("--ocr-pc-max-edit", type=int, default=2, help="max edit distance for OCR post-correction")
     parser.add_argument("--ocr-pc-top-k", type=int, default=20, help="top-k OCR texts for post-correction pool")
