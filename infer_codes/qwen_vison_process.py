@@ -461,7 +461,7 @@ def select_key_zoom(text_boxes_list, video, question, text_list=None):
         win_w, win_h = int(win_size * w), int(win_size * h)
 
         if g_crop_mode == 'density' and text_boxes:
-            # text-density-aware region proposals
+            # text-density-aware region proposals (pure density, no corners)
             win_sizes = [
                 (int(0.4 * w), int(0.4 * h)),
                 (int(0.6 * w), int(0.6 * h)),
@@ -471,7 +471,6 @@ def select_key_zoom(text_boxes_list, video, question, text_list=None):
                 text_boxes, h, w, win_sizes,
                 top_k=g_density_top_k, nms_thresh=g_density_nms)
             if proposals:
-                # use variable-size proposals
                 sub_imgs = []
                 inf_imgs = []
                 conversations = []
@@ -495,12 +494,30 @@ def select_key_zoom(text_boxes_list, video, question, text_list=None):
                             key_frame_zoom.append(np.array(sub_imgs[max_id].resize((w, h))))
                 continue  # skip fixed-corner logic for this frame
 
-        # fixed corner crops (original logic)
+        # fixed corner crops
         start_coords = [
         (0, 0),
         (w - win_w, 0),
         (0, h - win_h),
         (w - win_w, h - win_h)]
+
+        # hybrid mode: append density proposals as extra crops alongside corners
+        if g_crop_mode == 'hybrid' and text_boxes:
+            d_win_sizes = [
+                (int(0.4 * w), int(0.4 * h)),
+                (int(0.6 * w), int(0.6 * h)),
+                (int(0.8 * w), int(0.8 * h)),
+            ]
+            d_proposals = text_density_proposals(
+                text_boxes, h, w, d_win_sizes,
+                top_k=g_density_top_k, nms_thresh=g_density_nms)
+            for sx, sy, pw, ph in d_proposals:
+                # clamp to win_size crop for consistent scoring
+                cx, cy = sx + pw // 2, sy + ph // 2
+                sx2 = max(0, min(cx - win_w // 2, w - win_w))
+                sy2 = max(0, min(cy - win_h // 2, h - win_h))
+                if (sx2, sy2) not in start_coords:
+                    start_coords.append((sx2, sy2))
 
         # layout-guided: add text-centered crops based on bbox positions
         if use_layout_zoom != 'off' and text_boxes:

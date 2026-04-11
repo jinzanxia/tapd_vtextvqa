@@ -42,8 +42,8 @@ def get_parser():
     parser.add_argument("--ocr-pc-max-edit", type=int, default=2, help="max edit distance for OCR post-correction")
     parser.add_argument("--ocr-pc-top-k", type=int, default=20, help="top-k OCR texts for post-correction pool")
     parser.add_argument("--ocr-pc-min-freq", type=int, default=1, help="min frame freq for post-correction OCR pool")
-    parser.add_argument("--crop-mode", type=str, default="fixed", choices=["fixed", "density"],
-                        help="crop mode: fixed (4 corners + layout), density (text-density-aware proposals)")
+    parser.add_argument("--crop-mode", type=str, default="fixed", choices=["fixed", "density", "hybrid"],
+                        help="crop mode: fixed (4 corners + layout), density (density only), hybrid (4 corners + density)")
     parser.add_argument("--density-top-k", type=int, default=4, help="top-K proposals for density crop mode")
     parser.add_argument("--density-nms", type=float, default=0.5, help="NMS IoU threshold for density proposals")
     return parser

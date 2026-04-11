@@ -6,7 +6,7 @@
 #SBATCH --ntasks-per-node=1
 #SBATCH --mem=80G
 #SBATCH --time=48:00:00
-#SBATCH --array=0-6
+#SBATCH --array=0-10
 #SBATCH -o ./logs/density_%a.%N.%j.out
 #SBATCH -e ./logs/density_%a.%N.%j.err
 
@@ -31,8 +31,12 @@ mkdir -p ./logs ./results
 #   4: E — Density mode, top_k=4, nms=0.3
 #   5: F — Density mode, top_k=4, nms=0.5 + layout_full fallback
 #   6: G — Density mode, top_k=4, nms=0.5 + frame center fallback
+#   7: H — Hybrid: 4 corners + density top_k=2, nms=0.5
+#   8: I — Hybrid: 4 corners + density top_k=4, nms=0.5
+#   9: J — Hybrid: 4 corners + center + density top_k=2, nms=0.5
+#  10: K — Hybrid: 4 corners + center + density top_k=4, nms=0.5
 
-EXPERIMENT_NAMES=("baseline" "layout_full" "density_k4_n05" "density_k6_n05" "density_k4_n03" "density_k4_layout_full" "density_k4_layout_center")
+EXPERIMENT_NAMES=("baseline" "layout_full" "density_k4_n05" "density_k6_n05" "density_k4_n03" "density_k4_layout_full" "density_k4_layout_center" "hybrid_k2" "hybrid_k4" "hybrid_k2_center" "hybrid_k4_center")
 
 case ${SLURM_ARRAY_TASK_ID} in
   0)
@@ -62,6 +66,22 @@ case ${SLURM_ARRAY_TASK_ID} in
   6)
     # G: Density mode + frame center fallback (density when text_boxes, else fixed+center)
     EXTRA_ARGS="--no-ocr-text --no-focus-bonus --layout-zoom center --crop-mode density --density-top-k 4 --density-nms 0.5"
+    ;;
+  7)
+    # H: Hybrid — 4 corners + density top_k=2
+    EXTRA_ARGS="--no-ocr-text --no-focus-bonus --layout-zoom off --crop-mode hybrid --density-top-k 2 --density-nms 0.5"
+    ;;
+  8)
+    # I: Hybrid — 4 corners + density top_k=4
+    EXTRA_ARGS="--no-ocr-text --no-focus-bonus --layout-zoom off --crop-mode hybrid --density-top-k 4 --density-nms 0.5"
+    ;;
+  9)
+    # J: Hybrid — 4 corners + frame center + density top_k=2
+    EXTRA_ARGS="--no-ocr-text --no-focus-bonus --layout-zoom center --crop-mode hybrid --density-top-k 2 --density-nms 0.5"
+    ;;
+  10)
+    # K: Hybrid — 4 corners + frame center + density top_k=4
+    EXTRA_ARGS="--no-ocr-text --no-focus-bonus --layout-zoom center --crop-mode hybrid --density-top-k 4 --density-nms 0.5"
     ;;
 esac
 
