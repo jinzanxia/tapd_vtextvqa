@@ -6,7 +6,7 @@
 #SBATCH --ntasks-per-node=1
 #SBATCH --mem=80G
 #SBATCH --time=48:00:00
-#SBATCH --array=0-3
+#SBATCH --array=0-4
 #SBATCH -o ./logs/object_filter_%a.%N.%j.out
 #SBATCH -e ./logs/object_filter_%a.%N.%j.err
 
@@ -31,11 +31,13 @@ mkdir -p ./logs ./results
 # 1: density text+object (filtered classes)
 # 2: hybrid text-only
 # 3: hybrid text+object (filtered classes)
+# 4: hybrid_k2_center text+object (filtered classes)
 EXPERIMENT_NAMES=(
   "density_text_only"
   "density_text_object_filtered"
   "hybrid_text_only"
   "hybrid_text_object_filtered"
+  "hybrid_k2_center_text_object_filtered"
 )
 
 COMMON_ARGS="--no-ocr-text --no-focus-bonus --layout-zoom center --d2-config '${D2_CONFIG}'"
@@ -52,6 +54,9 @@ case ${SLURM_ARRAY_TASK_ID} in
     ;;
   3)
     EXTRA_ARGS="${COMMON_ARGS} --crop-mode hybrid --density-top-k 4 --density-nms 0.5 --d2-obj-classes ${D2_OBJ_CLASSES}"
+    ;;
+  4)
+    EXTRA_ARGS="${COMMON_ARGS} --crop-mode hybrid --density-top-k 2 --density-nms 0.5 --d2-obj-classes ${D2_OBJ_CLASSES}"
     ;;
 esac
 
