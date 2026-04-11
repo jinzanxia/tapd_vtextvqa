@@ -46,6 +46,10 @@ def get_parser():
                         help="crop mode: fixed (4 corners + layout), density (density only), hybrid (4 corners + density)")
     parser.add_argument("--density-top-k", type=int, default=4, help="top-K proposals for density crop mode")
     parser.add_argument("--density-nms", type=float, default=0.5, help="NMS IoU threshold for density proposals")
+    parser.add_argument("--d2-config", type=str, default="detectron2_coco.yaml", help="Detectron2 config file (COCO)")
+    parser.add_argument("--d2-weights", type=str, default=None, help="Detectron2 model weights (overrides config)")
+    parser.add_argument("--d2-obj-classes", type=str, default=None, help="Comma-separated COCO class ids to keep (e.g. '0,2,3')")
+    parser.add_argument("--no-object-detect", action="store_true", default=False, help="disable object detection for crop proposals")
     return parser
 
 if __name__ == "__main__":
@@ -86,6 +90,22 @@ if __name__ == "__main__":
         gt = json.load(f)
         f.close()
     total_time = 0
+    # Detectron2 object detector setup
+    d2_predictor = None
+    d2_class_ids = None
+    if not args.no_object_detect:
+        from detectron2.config import get_cfg
+        from detectron2.engine.defaults import DefaultPredictor
+        d2_cfg = get_cfg()
+        d2_cfg.merge_from_file(args.d2_config)
+        if args.d2_weights:
+            d2_cfg.MODEL.WEIGHTS = args.d2_weights
+        d2_cfg.MODEL.DEVICE = device
+        d2_cfg.freeze()
+        d2_predictor = DefaultPredictor(d2_cfg)
+        if args.d2_obj_classes:
+            d2_class_ids = [int(x) for x in args.d2_obj_classes.split(",") if x.strip().isdigit()]
+
     for data in tqdm(gt['data']):
         question = data['question']
 
@@ -108,6 +128,23 @@ if __name__ == "__main__":
         ann = {'video_id': vid, 'answer': gt_answer}
         gt_ans[qid] = ann
 
+        # 读取视频帧
+        import cv2
+        cap = cv2.VideoCapture(video_path)
+        frames = []
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                break
+            frames.append(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+        cap.release()
+
+        # Detectron2 物体检测
+        object_boxes_list = None
+        if d2_predictor is not None:
+            from qwen_vison_process import detectron2_object_det
+            object_boxes_list = detectron2_object_det(frames, d2_predictor, class_ids=d2_class_ids)
+
         promt = 'Please provide a brief answer based on the video, using as few words as possible. Question: ' + question
         conversation = [
             {"role": "system", "content": "You are a helpful assistant."},
@@ -120,7 +157,7 @@ if __name__ == "__main__":
             },
         ]
 
-        image_inputs, video_inputs, video_kwargs, all_text_lists = process_vision_info(question, conversation, return_video_kwargs=True)
+        image_inputs, video_inputs, video_kwargs, all_text_lists = process_vision_info(question, conversation, return_video_kwargs=True, object_boxes_list=object_boxes_list)
 
         # rebuild prompt with OCR text if available
         ocr_prefix = ''
@@ -133,6 +170,9 @@ if __name__ == "__main__":
             conversation[1]["content"][-1]["text"] = promt
             print(f'[OCR DEBUG] Q: {question}')
             print(f'[OCR DEBUG] OCR prefix: {ocr_prefix.strip()}')
+
+        # 传递物体检测结果到 select_key_zoom（需在 process_vision_info 内部适配）
+        # image_inputs, video_inputs, ... = process_vision_info(..., object_boxes_list=object_boxes_list)
 
         text = processor.apply_chat_template(conversation, tokenize=False, add_generation_prompt=True)
         inputs = processor(

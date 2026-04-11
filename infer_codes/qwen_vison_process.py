@@ -60,6 +60,29 @@ logger.info(f"set VIDEO_TOTAL_PIXELS: {VIDEO_TOTAL_PIXELS}")
 ### key frame zoom select
 a_token_id = 32 ### 'A' token id
 
+
+def detectron2_object_det(frames, predictor, class_ids=None):
+    """
+    frames: list of np.ndarray (H,W,3) RGB
+    predictor: Detectron2 DefaultPredictor
+    class_ids: list of int, 只保留这些类别的物体（可为None，保留全部）
+    return: list of list of [x1, y1, x2, y2] for each frame
+    """
+    results = []
+    for img in frames:
+        outputs = predictor(img[:, :, ::-1])  # Detectron2 expects BGR
+        boxes = []
+        if "instances" in outputs and len(outputs["instances"]):
+            inst = outputs["instances"]
+            pred_boxes = inst.pred_boxes.tensor.cpu().numpy()
+            pred_classes = inst.pred_classes.cpu().numpy()
+            for i, box in enumerate(pred_boxes):
+                if class_ids is None or pred_classes[i] in class_ids:
+                    x1, y1, x2, y2 = map(int, box)
+                    boxes.append([x1, y1, x2, y2])
+        results.append(boxes)
+    return results
+
 def set_key_conf(w_size=0.6, thrd=0.7, focus_bonus=True, layout_zoom='off',
                  kf_sample='off', kf_n_segments=8, kf_neighbors=1,
                  crop_mode='fixed', density_top_k=4, density_nms=0.5):
@@ -429,10 +452,59 @@ def text_density_proposals(text_boxes, h, w, win_sizes, top_k=4, nms_thresh=0.5,
     return proposals
 
 
-def select_key_zoom(text_boxes_list, video, question, text_list=None):
+def select_key_zoom(text_boxes_list, video, question, text_list=None, object_boxes_list=None):
+    """
+    object_boxes_list: list of list of [x1, y1, x2, y2] for each frame (可为None)
+    """
     global vlm_model, vlm_processor, threshold, win_size, use_focus_bonus, use_layout_zoom
     global g_crop_mode, g_density_top_k, g_density_nms
     h, w = video.shape[1:3]
+    def text_object_density_proposals(text_boxes, object_boxes, h, w, win_sizes, top_k=4, nms_thresh=0.5, stride_ratio=0.25):
+        """
+        先用文本框生成 density proposals，再扩展到包住 proposal+相关物体的最小外接矩形。
+        相关物体定义：与 proposal IoU>0.1 或中心点落在 proposal 内。
+        """
+        proposals = text_density_proposals(text_boxes, h, w, win_sizes, top_k=top_k, nms_thresh=nms_thresh, stride_ratio=stride_ratio)
+        if not object_boxes or not proposals:
+            return proposals
+        def iou(boxA, boxB):
+            ax1, ay1, ax2, ay2 = boxA
+            bx1, by1, bx2, by2 = boxB
+            ix1, iy1 = max(ax1, bx1), max(ay1, by1)
+            ix2, iy2 = min(ax2, bx2), min(ay2, by2)
+            inter = max(0, ix2 - ix1) * max(0, iy2 - iy1)
+            areaA = (ax2 - ax1) * (ay2 - ay1)
+            areaB = (bx2 - bx1) * (by2 - by1)
+            union = areaA + areaB - inter
+            return inter / union if union > 0 else 0
+        new_props = []
+        for sx, sy, ww, wh in proposals:
+            px1, py1, px2, py2 = sx, sy, sx+ww, sy+wh
+            related = []
+            for ob in object_boxes:
+                ox1, oy1, ox2, oy2 = ob
+                # IoU > 0.1
+                if iou([px1, py1, px2, py2], ob) > 0.1:
+                    related.append(ob)
+                    continue
+                # center in proposal
+                cx, cy = (ox1+ox2)//2, (oy1+oy2)//2
+                if px1 <= cx <= px2 and py1 <= cy <= py2:
+                    related.append(ob)
+            if related:
+                all_x1 = min([px1]+[b[0] for b in related])
+                all_y1 = min([py1]+[b[1] for b in related])
+                all_x2 = max([px2]+[b[2] for b in related])
+                all_y2 = max([py2]+[b[3] for b in related])
+                # clamp
+                all_x1 = max(0, all_x1)
+                all_y1 = max(0, all_y1)
+                all_x2 = min(w, all_x2)
+                all_y2 = min(h, all_y2)
+                new_props.append((all_x1, all_y1, all_x2-all_x1, all_y2-all_y1))
+            else:
+                new_props.append((px1, py1, ww, wh))
+        return new_props
     aspect_ratio = w / h
     key_frame_zoom = []
     
@@ -451,6 +523,7 @@ def select_key_zoom(text_boxes_list, video, question, text_list=None):
     question_lower = question.lower().split()
 
     for f_id, (text_boxes, frame) in enumerate(zip(text_boxes_list, video)):
+        object_boxes = object_boxes_list[f_id] if object_boxes_list is not None and f_id < len(object_boxes_list) else None
         frame_texts = text_list[f_id] if text_list and f_id < len(text_list) else []
         # check if any OCR text in this frame overlaps with question words
         text_bonus = 0.0
@@ -461,14 +534,14 @@ def select_key_zoom(text_boxes_list, video, question, text_list=None):
         win_w, win_h = int(win_size * w), int(win_size * h)
 
         if g_crop_mode == 'density' and text_boxes:
-            # text-density-aware region proposals (pure density, no corners)
+            # 文本+物体联合 proposal
             win_sizes = [
                 (int(0.4 * w), int(0.4 * h)),
                 (int(0.6 * w), int(0.6 * h)),
                 (int(0.8 * w), int(0.8 * h)),
             ]
-            proposals = text_density_proposals(
-                text_boxes, h, w, win_sizes,
+            proposals = text_object_density_proposals(
+                text_boxes, object_boxes, h, w, win_sizes,
                 top_k=g_density_top_k, nms_thresh=g_density_nms)
             if proposals:
                 sub_imgs = []
@@ -495,29 +568,27 @@ def select_key_zoom(text_boxes_list, video, question, text_list=None):
                 continue  # skip fixed-corner logic for this frame
 
         # fixed corner crops
-        start_coords = [
-        (0, 0),
-        (w - win_w, 0),
-        (0, h - win_h),
-        (w - win_w, h - win_h)]
+        crop_candidates = [
+            (0, 0, win_w, win_h),
+            (w - win_w, 0, win_w, win_h),
+            (0, h - win_h, win_w, win_h),
+            (w - win_w, h - win_h, win_w, win_h),
+        ]
 
-        # hybrid mode: append density proposals as extra crops alongside corners
+        # hybrid mode: append density+object proposals as extra crops alongside corners
         if g_crop_mode == 'hybrid' and text_boxes:
             d_win_sizes = [
                 (int(0.4 * w), int(0.4 * h)),
                 (int(0.6 * w), int(0.6 * h)),
                 (int(0.8 * w), int(0.8 * h)),
             ]
-            d_proposals = text_density_proposals(
-                text_boxes, h, w, d_win_sizes,
+            d_proposals = text_object_density_proposals(
+                text_boxes, object_boxes, h, w, d_win_sizes,
                 top_k=g_density_top_k, nms_thresh=g_density_nms)
             for sx, sy, pw, ph in d_proposals:
-                # clamp to win_size crop for consistent scoring
-                cx, cy = sx + pw // 2, sy + ph // 2
-                sx2 = max(0, min(cx - win_w // 2, w - win_w))
-                sy2 = max(0, min(cy - win_h // 2, h - win_h))
-                if (sx2, sy2) not in start_coords:
-                    start_coords.append((sx2, sy2))
+                candidate = (sx, sy, pw, ph)
+                if candidate not in crop_candidates:
+                    crop_candidates.append(candidate)
 
         # layout-guided: add text-centered crops based on bbox positions
         if use_layout_zoom != 'off' and text_boxes:
@@ -527,20 +598,22 @@ def select_key_zoom(text_boxes_list, video, question, text_list=None):
                 cy = int(np.mean([(b[1] + b[3]) / 2 for b in text_boxes]))
                 sx = max(0, min(cx - win_w // 2, w - win_w))
                 sy = max(0, min(cy - win_h // 2, h - win_h))
-                if (sx, sy) not in start_coords:
-                    start_coords.append((sx, sy))
+                candidate = (sx, sy, win_w, win_h)
+                if candidate not in crop_candidates:
+                    crop_candidates.append(candidate)
             # frame center crop (center / full mode)
             if use_layout_zoom in ('center', 'full'):
                 csx = max(0, (w - win_w) // 2)
                 csy = max(0, (h - win_h) // 2)
-                if (csx, csy) not in start_coords:
-                    start_coords.append((csx, csy))
+                candidate = (csx, csy, win_w, win_h)
+                if candidate not in crop_candidates:
+                    crop_candidates.append(candidate)
 
         sub_imgs = []
         inf_imgs = []
         conversations = []
-        for s_id, (s_x, s_y) in enumerate(start_coords):
-            e_x, e_y = s_x + win_w, s_y + win_h
+        for s_id, (s_x, s_y, base_w, base_h) in enumerate(crop_candidates):
+            e_x, e_y = s_x + base_w, s_y + base_h
             relevant_boxes = []
 
             for box in text_boxes:
@@ -887,7 +960,7 @@ def get_video_reader_backend() -> str:
     return video_reader_backend
 
 
-def fetch_video(ele: dict, question: str, image_factor: int = IMAGE_FACTOR, return_video_sample_fps: bool = False) -> torch.Tensor | list[Image.Image]:
+def fetch_video(ele: dict, question: str, image_factor: int = IMAGE_FACTOR, return_video_sample_fps: bool = False, object_boxes_list=None) -> torch.Tensor | list[Image.Image]:
     global video_text_spotter, tracker_visualizer, all_oframes, all_pframes, all_avg
     if isinstance(ele["video"], str):
         video_reader_backend = get_video_reader_backend()
@@ -906,7 +979,17 @@ def fetch_video(ele: dict, question: str, image_factor: int = IMAGE_FACTOR, retu
             video_sampled = video
 
         text_boxes_list, text_list = ocr_det_with_text(video_sampled)
-        key_frame_zoom = select_key_zoom(text_boxes_list, video_sampled, question, text_list=text_list)
+        # object_boxes_list: full帧，需采样同步
+        obj_boxes = None
+        if object_boxes_list is not None:
+            if len(object_boxes_list) == len(video):
+                if kf_sample_mode != 'off':
+                    obj_boxes = [object_boxes_list[i] for i in kf_indices]
+                else:
+                    obj_boxes = object_boxes_list
+            else:
+                obj_boxes = None
+        key_frame_zoom = select_key_zoom(text_boxes_list, video_sampled, question, text_list=text_list, object_boxes_list=obj_boxes)
         
         oframes = video.shape[0]
         all_oframes += oframes
@@ -995,6 +1078,7 @@ def process_vision_info(
     question,
     conversations: list[dict] | list[list[dict]],
     return_video_kwargs: bool = False,
+    object_boxes_list=None,
 ) -> tuple[list[Image.Image] | None, list[torch.Tensor | list[Image.Image]] | None, Optional[dict]]:
 
     vision_infos = extract_vision_info(conversations)
@@ -1003,11 +1087,13 @@ def process_vision_info(
     video_inputs = []
     video_sample_fps_list = []
     all_text_lists = []
-    for vision_info in vision_infos:
+    for idx, vision_info in enumerate(vision_infos):
         if "image" in vision_info or "image_url" in vision_info:
             image_inputs.append(fetch_image(vision_info))
         elif "video" in vision_info:
-            video_input, video_sample_fps, text_list = fetch_video(vision_info, question, return_video_sample_fps=True)
+            # object_boxes_list: 支持多视频/多段，按顺序分配
+            obj_boxes = object_boxes_list[idx] if object_boxes_list is not None and isinstance(object_boxes_list, list) and len(object_boxes_list) == len(vision_infos) else object_boxes_list
+            video_input, video_sample_fps, text_list = fetch_video(vision_info, question, return_video_sample_fps=True, object_boxes_list=obj_boxes)
             video_sample_fps_list.append(video_sample_fps)
             video_inputs.append(video_input)
             all_text_lists.append(text_list)
@@ -1020,4 +1106,3 @@ def process_vision_info(
     if return_video_kwargs:
         return image_inputs, video_inputs, {'fps': video_sample_fps_list}, all_text_lists
     return image_inputs, video_inputs
-
