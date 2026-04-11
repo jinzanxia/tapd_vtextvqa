@@ -22,8 +22,16 @@ GT_JSON="${DATA_DIR}/Annotations/ViteVQA_0.0.2_t1s1val.json"
 VIDEO_DIR="${DATA_DIR}/video"
 VTS_MODEL="${DATA_DIR}/GoMatching_pp_vitaeb_bovtext.pth"
 
-# Optional: set COCO class ids if you want category filtering, e.g. "0,1,2,3,5,7"
-D2_OBJ_CLASSES=""
+# COCO-mappable subset of the requested object list:
+# - stop sign(11): traffic_sign / street_sign (approximation)
+# - car(2), bus(5), truck(7)
+# - bottle(39)
+# - tv(62): screen / display (approximation)
+# - book(73)
+# Categories such as billboard, banner, poster, storefront, shop, logo, brand,
+# license_plate, product, package, box, document, paper, building, wall, window
+# do not have direct COCO class matches in this detector config.
+D2_OBJ_CLASSES="11,2,5,7,39,62,73"
 
 mkdir -p ./logs ./results
 
