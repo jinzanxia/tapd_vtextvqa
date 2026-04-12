@@ -988,7 +988,12 @@ def fetch_video(
         text_boxes_list, text_list = ocr_det_with_text(video_sampled)
         obj_boxes = None
         if d2_predictor is not None:
-            sampled_frames = [frame.cpu().numpy() for frame in video_sampled]
+            sampled_frames = []
+            for frame in video_sampled:
+                if hasattr(frame, "cpu"):
+                    sampled_frames.append(frame.cpu().numpy())
+                else:
+                    sampled_frames.append(np.asarray(frame))
             obj_boxes = detectron2_object_det(sampled_frames, d2_predictor, class_ids=d2_class_ids)
         key_frame_zoom = select_key_zoom(text_boxes_list, video_sampled, question, text_list=text_list, object_boxes_list=obj_boxes)
         
