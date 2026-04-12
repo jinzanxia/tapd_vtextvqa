@@ -48,7 +48,7 @@ def build_d2_predictor(device, cfg_path, weights=None):
 
 def expand_text_props_with_objects(proposals, object_boxes, h, w):
     if not object_boxes:
-        return list(proposals)
+        return list(proposals), [[] for _ in proposals]
 
     def iou(box_a, box_b):
         ax1, ay1, ax2, ay2 = box_a
