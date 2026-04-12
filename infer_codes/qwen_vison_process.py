@@ -960,7 +960,14 @@ def get_video_reader_backend() -> str:
     return video_reader_backend
 
 
-def fetch_video(ele: dict, question: str, image_factor: int = IMAGE_FACTOR, return_video_sample_fps: bool = False, object_boxes_list=None) -> torch.Tensor | list[Image.Image]:
+def fetch_video(
+    ele: dict,
+    question: str,
+    image_factor: int = IMAGE_FACTOR,
+    return_video_sample_fps: bool = False,
+    d2_predictor=None,
+    d2_class_ids=None,
+) -> torch.Tensor | list[Image.Image]:
     global video_text_spotter, tracker_visualizer, all_oframes, all_pframes, all_avg
     if isinstance(ele["video"], str):
         video_reader_backend = get_video_reader_backend()
@@ -979,16 +986,10 @@ def fetch_video(ele: dict, question: str, image_factor: int = IMAGE_FACTOR, retu
             video_sampled = video
 
         text_boxes_list, text_list = ocr_det_with_text(video_sampled)
-        # object_boxes_list: full帧，需采样同步
         obj_boxes = None
-        if object_boxes_list is not None:
-            if len(object_boxes_list) == len(video):
-                if kf_sample_mode != 'off':
-                    obj_boxes = [object_boxes_list[i] for i in kf_indices]
-                else:
-                    obj_boxes = object_boxes_list
-            else:
-                obj_boxes = None
+        if d2_predictor is not None:
+            sampled_frames = [frame.cpu().numpy() for frame in video_sampled]
+            obj_boxes = detectron2_object_det(sampled_frames, d2_predictor, class_ids=d2_class_ids)
         key_frame_zoom = select_key_zoom(text_boxes_list, video_sampled, question, text_list=text_list, object_boxes_list=obj_boxes)
         
         oframes = video.shape[0]
@@ -1078,7 +1079,8 @@ def process_vision_info(
     question,
     conversations: list[dict] | list[list[dict]],
     return_video_kwargs: bool = False,
-    object_boxes_list=None,
+    d2_predictor=None,
+    d2_class_ids=None,
 ) -> tuple[list[Image.Image] | None, list[torch.Tensor | list[Image.Image]] | None, Optional[dict]]:
 
     vision_infos = extract_vision_info(conversations)
@@ -1091,9 +1093,13 @@ def process_vision_info(
         if "image" in vision_info or "image_url" in vision_info:
             image_inputs.append(fetch_image(vision_info))
         elif "video" in vision_info:
-            # object_boxes_list: 支持多视频/多段，按顺序分配
-            obj_boxes = object_boxes_list[idx] if object_boxes_list is not None and isinstance(object_boxes_list, list) and len(object_boxes_list) == len(vision_infos) else object_boxes_list
-            video_input, video_sample_fps, text_list = fetch_video(vision_info, question, return_video_sample_fps=True, object_boxes_list=obj_boxes)
+            video_input, video_sample_fps, text_list = fetch_video(
+                vision_info,
+                question,
+                return_video_sample_fps=True,
+                d2_predictor=d2_predictor,
+                d2_class_ids=d2_class_ids,
+            )
             video_sample_fps_list.append(video_sample_fps)
             video_inputs.append(video_input)
             all_text_lists.append(text_list)

@@ -128,23 +128,6 @@ if __name__ == "__main__":
         ann = {'video_id': vid, 'answer': gt_answer}
         gt_ans[qid] = ann
 
-        # 读取视频帧
-        import cv2
-        cap = cv2.VideoCapture(video_path)
-        frames = []
-        while True:
-            ret, frame = cap.read()
-            if not ret:
-                break
-            frames.append(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
-        cap.release()
-
-        # Detectron2 物体检测
-        object_boxes_list = None
-        if d2_predictor is not None:
-            from qwen_vison_process import detectron2_object_det
-            object_boxes_list = detectron2_object_det(frames, d2_predictor, class_ids=d2_class_ids)
-
         promt = 'Please provide a brief answer based on the video, using as few words as possible. Question: ' + question
         conversation = [
             {"role": "system", "content": "You are a helpful assistant."},
@@ -157,7 +140,13 @@ if __name__ == "__main__":
             },
         ]
 
-        image_inputs, video_inputs, video_kwargs, all_text_lists = process_vision_info(question, conversation, return_video_kwargs=True, object_boxes_list=object_boxes_list)
+        image_inputs, video_inputs, video_kwargs, all_text_lists = process_vision_info(
+            question,
+            conversation,
+            return_video_kwargs=True,
+            d2_predictor=d2_predictor,
+            d2_class_ids=d2_class_ids,
+        )
 
         # rebuild prompt with OCR text if available
         ocr_prefix = ''
