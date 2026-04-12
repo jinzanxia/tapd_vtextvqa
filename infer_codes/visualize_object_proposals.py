@@ -16,16 +16,16 @@ from qwen_vison_process import (  # noqa: E402
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Visualize text proposals and object-expanded proposals.")
+    parser = argparse.ArgumentParser(description="Visualize clustered text proposals and object-expanded proposals.")
     parser.add_argument("--video-path", required=True, help="Input video path")
     parser.add_argument("--output-dir", required=True, help="Directory to save visualizations")
     parser.add_argument("--vts-config", required=True, help="GoMatching config path")
     parser.add_argument("--vts-model", required=True, help="GoMatching model path")
     parser.add_argument("--fps", type=float, default=1.0, help="Sampling fps for decord video reader")
     parser.add_argument("--device", type=str, default="cuda:0", help="Inference device")
-    parser.add_argument("--top-k", type=int, default=2, help="Number of density proposals to visualize")
-    parser.add_argument("--density-nms", type=float, default=0.5, help="NMS threshold for density proposals")
-    parser.add_argument("--stride-ratio", type=float, default=0.25, help="Stride ratio for density proposals")
+    parser.add_argument("--top-k", type=int, default=2, help="Number of text-cluster proposals to visualize")
+    parser.add_argument("--density-nms", type=float, default=0.5, help="Unused legacy arg kept for compatibility")
+    parser.add_argument("--stride-ratio", type=float, default=0.25, help="Unused legacy arg kept for compatibility")
     parser.add_argument("--max-save", type=int, default=8, help="Max number of frames to save")
     parser.add_argument("--d2-config", type=str, default="detectron2_coco.yaml", help="Detectron2 config")
     parser.add_argument("--d2-weights", type=str, default=None, help="Detectron2 weights override")
@@ -188,12 +188,12 @@ def main():
         left = draw_xyxy_boxes(base, text_boxes, (0, 220, 0), thickness=2)
         left = draw_xyxy_boxes(left, object_boxes, (255, 120, 0), thickness=1)
         left = draw_boxes(left, text_props, (0, 0, 255), "T")
-        left = add_title(left, f"Frame {frame_idx}: top-{len(text_props)} text proposals")
+        left = add_title(left, f"Frame {frame_idx}: top-{len(text_props)} text clusters")
 
         right = draw_xyxy_boxes(base, text_boxes, (0, 220, 0), thickness=2)
         right = draw_xyxy_boxes(right, object_boxes, (255, 120, 0), thickness=1)
         right = draw_boxes(right, expanded_props, (0, 255, 255), "O")
-        right = add_title(right, f"Frame {frame_idx}: object-expanded proposals")
+        right = add_title(right, f"Frame {frame_idx}: object-expanded clusters")
 
         merged = cv2.hconcat([left, right])
         out_path = os.path.join(args.output_dir, f"frame_{rank:02d}_idx_{frame_idx:04d}.jpg")

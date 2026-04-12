@@ -6,7 +6,7 @@
 #SBATCH --ntasks-per-node=1
 #SBATCH --mem=80G
 #SBATCH --time=48:00:00
-#SBATCH --array=0-7
+#SBATCH --array=0-5
 #SBATCH -o ./logs/ablation_%a.%N.%j.out
 #SBATCH -e ./logs/ablation_%a.%N.%j.err
 
@@ -25,15 +25,13 @@ mkdir -p ./logs ./results
 
 # ===== Ablation experiment definitions =====
 #   0: A — Baseline (no OCR, no Focus bonus)
-#   1: B — OCR top-5 freq>=2  (unconditional inject, no Focus bonus)
-#   2: C — OCR top-3 freq>=3  (stricter filter, no Focus bonus)
-#   3: D — OCR top-10 freq>=1 (loose filter, no Focus bonus)
+#   1: B — OCR top-5 freq>=2 + hint prompt (no Focus bonus)
+#   2: C — OCR top-3 freq>=3 + hint prompt (no Focus bonus, stricter filter)
+#   3: D — OCR top-10 freq>=1 + hint prompt (no Focus bonus, loose filter)
 #   4: E — Focus bonus only (no OCR text)
-#   5: F — OCR top-5 freq>=2 + Focus bonus (full, unconditional)
-#   6: G — Conditional OCR top-5 freq>=2 (inject only for text/number Qs)
-#   7: H — Conditional OCR top-5 freq>=2 + Focus bonus
+#   5: F — OCR top-5 freq>=2 + Focus bonus (full pipeline)
 
-EXPERIMENT_NAMES=("baseline" "ocr_top5_freq2" "ocr_top3_freq3" "ocr_top10_freq1" "focus_bonus" "ocr_top5_freq2_focus" "cond_ocr_top5_freq2" "cond_ocr_top5_freq2_focus")
+EXPERIMENT_NAMES=("baseline" "ocr_top5_freq2" "ocr_top3_freq3" "ocr_top10_freq1" "focus_bonus" "ocr_top5_freq2_focus")
 
 case ${SLURM_ARRAY_TASK_ID} in
   0)
@@ -57,16 +55,8 @@ case ${SLURM_ARRAY_TASK_ID} in
     EXTRA_ARGS="--no-ocr-text --use-focus-bonus"
     ;;
   5)
-    # F: OCR top-5 freq>=2 + Focus bonus (unconditional)
+    # F: OCR top-5 freq>=2 + Focus bonus
     EXTRA_ARGS="--use-ocr-text --ocr-top-k 5 --ocr-min-freq 2 --use-focus-bonus"
-    ;;
-  6)
-    # G: Conditional OCR top-5 freq>=2 (only text/number questions)
-    EXTRA_ARGS="--use-ocr-text --conditional-ocr --ocr-top-k 5 --ocr-min-freq 2 --no-focus-bonus"
-    ;;
-  7)
-    # H: Conditional OCR top-5 freq>=2 + Focus bonus
-    EXTRA_ARGS="--use-ocr-text --conditional-ocr --ocr-top-k 5 --ocr-min-freq 2 --use-focus-bonus"
     ;;
 esac
 

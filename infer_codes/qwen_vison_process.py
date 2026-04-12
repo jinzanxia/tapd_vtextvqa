@@ -367,88 +367,99 @@ def ocr_det_with_text(video):
     return box_list, text_list
     
 def text_density_proposals(text_boxes, h, w, win_sizes, top_k=4, nms_thresh=0.5, stride_ratio=0.25):
-    """Generate crop proposals ranked by text density using bbox-based heatmap.
+    """Generate proposals from clustered text boxes instead of sliding windows.
 
     Args:
         text_boxes: list of [x1, y1, x2, y2] bboxes from GoMatching
         h, w: frame dimensions
-        win_sizes: list of (win_w, win_h) tuples to try
-        top_k: max proposals after NMS
-        nms_thresh: IoU threshold for NMS
-        stride_ratio: stride as fraction of window size
+        win_sizes, nms_thresh, stride_ratio: kept for backward compatibility
+        top_k: max number of clustered text proposals
     Returns:
-        list of (sx, sy, win_w, win_h) proposals sorted by score descending
+        list of (sx, sy, win_w, win_h) proposals sorted by cluster score descending
     """
     if not text_boxes:
         return []
 
-    # build density map at 1/4 resolution for speed
-    scale = 4
-    dh, dw = h // scale, w // scale
-    density = np.zeros((dh, dw), dtype=np.float32)
-    for bx1, by1, bx2, by2 in text_boxes:
-        y1d = max(0, int(by1 / scale))
-        y2d = min(dh, int(by2 / scale))
-        x1d = max(0, int(bx1 / scale))
-        x2d = min(dw, int(bx2 / scale))
-        if y2d > y1d and x2d > x1d:
-            density[y1d:y2d, x1d:x2d] += 1.0
+    boxes = [list(map(int, b)) for b in text_boxes]
+    n = len(boxes)
+    parents = list(range(n))
 
-    # integral image for fast window sum
-    integral = np.zeros((dh + 1, dw + 1), dtype=np.float64)
-    integral[1:, 1:] = np.cumsum(np.cumsum(density, axis=0), axis=1)
+    def find(x):
+        while parents[x] != x:
+            parents[x] = parents[parents[x]]
+            x = parents[x]
+        return x
 
-    def window_sum(y1, x1, y2, x2):
-        return integral[y2, x2] - integral[y1, x2] - integral[y2, x1] + integral[y1, x1]
+    def union(a, b):
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            parents[rb] = ra
 
-    # slide windows at multiple scales
-    candidates = []  # (score, sx, sy, win_w, win_h)
-    for ww, wh in win_sizes:
-        dww, dwh = ww // scale, wh // scale
-        if dww < 1 or dwh < 1:
-            continue
-        stride_x = max(1, int(dww * stride_ratio))
-        stride_y = max(1, int(dwh * stride_ratio))
-        for dy in range(0, dh - dwh + 1, stride_y):
-            for dx in range(0, dw - dww + 1, stride_x):
-                s = window_sum(dy, dx, dy + dwh, dx + dww)
-                if s > 0:
-                    candidates.append((s, dx * scale, dy * scale, ww, wh))
+    def overlap_1d(a1, a2, b1, b2):
+        return max(0, min(a2, b2) - max(a1, b1))
 
-    if not candidates:
-        return []
+    def should_merge(box_a, box_b):
+        ax1, ay1, ax2, ay2 = box_a
+        bx1, by1, bx2, by2 = box_b
+        aw, ah = max(1, ax2 - ax1), max(1, ay2 - ay1)
+        bw, bh = max(1, bx2 - bx1), max(1, by2 - by1)
 
-    # sort by score descending
-    candidates.sort(key=lambda x: x[0], reverse=True)
+        x_overlap = overlap_1d(ax1, ax2, bx1, bx2)
+        y_overlap = overlap_1d(ay1, ay2, by1, by2)
+        min_h = max(1, min(ah, bh))
+        min_w = max(1, min(aw, bw))
 
-    # NMS
-    def iou(a, b):
-        ax1, ay1 = a[1], a[2]
-        ax2, ay2 = a[1] + a[3], a[2] + a[4]
-        bx1, by1 = b[1], b[2]
-        bx2, by2 = b[1] + b[3], b[2] + b[4]
-        ix1, iy1 = max(ax1, bx1), max(ay1, by1)
-        ix2, iy2 = min(ax2, bx2), min(ay2, by2)
-        inter = max(0, ix2 - ix1) * max(0, iy2 - iy1)
-        area_a = (ax2 - ax1) * (ay2 - ay1)
-        area_b = (bx2 - bx1) * (by2 - by1)
-        union = area_a + area_b - inter
-        return inter / union if union > 0 else 0
+        # Same text line / nearby words.
+        horiz_gap = max(0, max(ax1, bx1) - min(ax2, bx2))
+        same_line = y_overlap / min_h >= 0.4 and horiz_gap <= 1.5 * max(ah, bh)
 
-    kept = []
-    for c in candidates:
-        if all(iou(c, k) < nms_thresh for k in kept):
-            kept.append(c)
-        if len(kept) >= top_k:
-            break
+        # Same vertical stack / signboard.
+        vert_gap = max(0, max(ay1, by1) - min(ay2, by2))
+        same_column = x_overlap / min_w >= 0.3 and vert_gap <= 1.0 * max(ah, bh)
 
-    # convert to (sx, sy, win_w, win_h), clamp to frame
+        # Direct overlap or very close centers.
+        inter = x_overlap * y_overlap
+        area_a = aw * ah
+        area_b = bw * bh
+        union_area = area_a + area_b - inter
+        iou = inter / union_area if union_area > 0 else 0.0
+        acx, acy = (ax1 + ax2) / 2.0, (ay1 + ay2) / 2.0
+        bcx, bcy = (bx1 + bx2) / 2.0, (by1 + by2) / 2.0
+        center_close = (
+            abs(acx - bcx) <= 2.0 * max(aw, bw)
+            and abs(acy - bcy) <= 1.5 * max(ah, bh)
+        )
+
+        return iou > 0 or same_line or same_column or center_close
+
+    for i in range(n):
+        for j in range(i + 1, n):
+            if should_merge(boxes[i], boxes[j]):
+                union(i, j)
+
+    clusters = {}
+    for idx, box in enumerate(boxes):
+        root = find(idx)
+        clusters.setdefault(root, []).append(box)
+
     proposals = []
-    for _, sx, sy, ww, wh in kept:
-        sx = max(0, min(sx, w - ww))
-        sy = max(0, min(sy, h - wh))
-        proposals.append((sx, sy, ww, wh))
+    scored = []
+    for cluster_boxes in clusters.values():
+        x1 = max(0, min(b[0] for b in cluster_boxes))
+        y1 = max(0, min(b[1] for b in cluster_boxes))
+        x2 = min(w, max(b[2] for b in cluster_boxes))
+        y2 = min(h, max(b[3] for b in cluster_boxes))
+        if x2 <= x1 or y2 <= y1:
+            continue
 
+        cluster_area = sum(max(1, (b[2] - b[0]) * (b[3] - b[1])) for b in cluster_boxes)
+        union_area = max(1, (x2 - x1) * (y2 - y1))
+        score = (len(cluster_boxes), cluster_area / union_area, cluster_area, -y1, -x1)
+        scored.append((score, (x1, y1, x2 - x1, y2 - y1)))
+
+    scored.sort(key=lambda x: x[0], reverse=True)
+    for _, prop in scored[:top_k]:
+        proposals.append(prop)
     return proposals
 
 
