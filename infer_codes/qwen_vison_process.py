@@ -1237,6 +1237,69 @@ def fetch_video(
         return images
 
 
+def fetch_video_nocrop(
+    ele: dict,
+    image_factor: int = IMAGE_FACTOR,
+    return_video_sample_fps: bool = False,
+) -> torch.Tensor | list[Image.Image]:
+    """Read video frames by fps/nframes and resize for Qwen, without OCR/crop/zoom."""
+    if isinstance(ele["video"], str):
+        video_reader_backend = get_video_reader_backend()
+        try:
+            video, sample_fps = VIDEO_READER_BACKENDS[video_reader_backend](ele)
+        except Exception as e:
+            logger.warning(f"video_reader_backend {video_reader_backend} error, use torchvision as default, msg: {e}")
+            video, sample_fps = VIDEO_READER_BACKENDS["torchvision"](ele)
+
+        video = torch.tensor(video).permute(0, 3, 1, 2)
+        nframes, _, height, width = video.shape
+        min_pixels = ele.get("min_pixels", VIDEO_MIN_PIXELS)
+        total_pixels = ele.get("total_pixels", VIDEO_TOTAL_PIXELS)
+        max_pixels = max(min(VIDEO_MAX_PIXELS, total_pixels / nframes * FRAME_FACTOR), int(min_pixels * 1.05))
+        max_pixels_supposed = ele.get("max_pixels", max_pixels)
+        if max_pixels_supposed > max_pixels:
+            logger.warning(f"The given max_pixels[{max_pixels_supposed}] exceeds limit[{max_pixels}].")
+        max_pixels = min(max_pixels_supposed, max_pixels)
+        if "resized_height" in ele and "resized_width" in ele:
+            resized_height, resized_width = smart_resize(
+                ele["resized_height"],
+                ele["resized_width"],
+                factor=image_factor,
+            )
+        else:
+            resized_height, resized_width = smart_resize(
+                height,
+                width,
+                factor=image_factor,
+                min_pixels=min_pixels,
+                max_pixels=max_pixels,
+            )
+        video = transforms.functional.resize(
+            video,
+            [resized_height, resized_width],
+            interpolation=InterpolationMode.BICUBIC,
+            antialias=True,
+        ).float()
+        if return_video_sample_fps:
+            return video, sample_fps
+        return video
+    else:
+        assert isinstance(ele["video"], (list, tuple))
+        process_info = ele.copy()
+        process_info.pop("type", None)
+        process_info.pop("video", None)
+        images = [
+            fetch_image({"image": video_element, **process_info}, size_factor=image_factor)
+            for video_element in ele["video"]
+        ]
+        nframes = ceil_by_factor(len(images), FRAME_FACTOR)
+        if len(images) < nframes:
+            images.extend([images[-1]] * (nframes - len(images)))
+        if return_video_sample_fps:
+            return images, process_info.pop("fps", 2.0)
+        return images
+
+
 def extract_vision_info(conversations: list[dict] | list[list[dict]]) -> list[dict]:
     vision_infos = []
     if isinstance(conversations[0], dict):
@@ -1291,4 +1354,34 @@ def process_vision_info(
         video_inputs = None
     if return_video_kwargs:
         return image_inputs, video_inputs, {'fps': video_sample_fps_list}, all_text_lists
+    return image_inputs, video_inputs
+
+
+def process_vision_info_nocrop(
+    conversations: list[dict] | list[list[dict]],
+    return_video_kwargs: bool = False,
+) -> tuple[list[Image.Image] | None, list[torch.Tensor | list[Image.Image]] | None, Optional[dict]]:
+    """Read images/videos for Qwen without OCR, crop, zoom, or object proposals."""
+    vision_infos = extract_vision_info(conversations)
+    image_inputs = []
+    video_inputs = []
+    video_sample_fps_list = []
+    for vision_info in vision_infos:
+        if "image" in vision_info or "image_url" in vision_info:
+            image_inputs.append(fetch_image(vision_info))
+        elif "video" in vision_info:
+            video_input, video_sample_fps = fetch_video_nocrop(
+                vision_info,
+                return_video_sample_fps=True,
+            )
+            video_sample_fps_list.append(video_sample_fps)
+            video_inputs.append(video_input)
+        else:
+            raise ValueError("image, image_url or video should in content.")
+    if len(image_inputs) == 0:
+        image_inputs = None
+    if len(video_inputs) == 0:
+        video_inputs = None
+    if return_video_kwargs:
+        return image_inputs, video_inputs, {'fps': video_sample_fps_list}
     return image_inputs, video_inputs
