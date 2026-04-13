@@ -33,7 +33,7 @@ mkdir -p ./logs ./results
 EXPERIMENT_NAMES=(
   "textcluster_object_er04_ms04"
   "textcluster_object_multiscale_center"
-  "textcluster_object_density06_center"
+  "hybrid_k2_center_plus_textcluster_object_er04_ms04"
   "textcluster_object_clsfilter_er04_ms04"
 )
 
@@ -47,7 +47,7 @@ case ${SLURM_ARRAY_TASK_ID} in
     EXTRA_ARGS="${COMMON_ARGS} --cluster-multi-scales 1.0,1.5"
     ;;
   2)
-    EXTRA_ARGS="${COMMON_ARGS} --cluster-expand-ratio 0.4 --cluster-min-size-ratio 0.4 --cluster-add-density-scale 0.6"
+    EXTRA_ARGS="${COMMON_ARGS} --cluster-expand-ratio 0.4 --cluster-min-size-ratio 0.4 --cluster-add-density-scale 0.6 --cluster-add-density-top-k 2"
     ;;
   3)
     EXTRA_ARGS="${COMMON_ARGS} --cluster-expand-ratio 0.4 --cluster-min-size-ratio 0.4 --d2-obj-classes ${D2_OBJ_CLASSES}"

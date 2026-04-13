@@ -54,6 +54,8 @@ def get_parser():
                         help="comma-separated scale factors for clustered proposals, e.g. '1.0,1.5'")
     parser.add_argument("--cluster-add-density-scale", type=float, default=0.0,
                         help="append one sliding-window density proposal of this relative scale, e.g. 0.6")
+    parser.add_argument("--cluster-add-density-top-k", type=int, default=1,
+                        help="number of extra sliding-window density proposals to append when cluster-add-density-scale > 0")
     parser.add_argument("--d2-config", type=str, default="detectron2_coco.yaml", help="Detectron2 config file (COCO)")
     parser.add_argument("--d2-weights", type=str, default=None, help="Detectron2 model weights (overrides config)")
     parser.add_argument("--d2-obj-classes", type=str, default=None, help="Comma-separated COCO class ids to keep (e.g. '0,2,3')")
@@ -72,7 +74,8 @@ if __name__ == "__main__":
                  cluster_expand_ratio=args.cluster_expand_ratio,
                  cluster_min_size_ratio=args.cluster_min_size_ratio,
                  cluster_multi_scales=args.cluster_multi_scales,
-                 cluster_add_density_scale=args.cluster_add_density_scale)
+                 cluster_add_density_scale=args.cluster_add_density_scale,
+                 cluster_add_density_top_k=args.cluster_add_density_top_k)
 
     anls_metr = anls_metric.ANLS_metric()
     stvqa_acc_metr = stvqa_acc_metric.STVQAAcc_metric()

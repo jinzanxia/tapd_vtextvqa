@@ -87,11 +87,12 @@ def set_key_conf(w_size=0.6, thrd=0.7, focus_bonus=True, layout_zoom='off',
                  kf_sample='off', kf_n_segments=8, kf_neighbors=1,
                  crop_mode='fixed', density_top_k=4, density_nms=0.5,
                  cluster_expand_ratio=0.0, cluster_min_size_ratio=0.0,
-                 cluster_multi_scales=None, cluster_add_density_scale=0.0):
+                 cluster_multi_scales=None, cluster_add_density_scale=0.0,
+                 cluster_add_density_top_k=1):
     global win_size, threshold, use_focus_bonus, use_layout_zoom
     global kf_sample_mode, kf_n_seg, kf_k
     global g_crop_mode, g_density_top_k, g_density_nms
-    global g_cluster_expand_ratio, g_cluster_min_size_ratio, g_cluster_multi_scales, g_cluster_add_density_scale
+    global g_cluster_expand_ratio, g_cluster_min_size_ratio, g_cluster_multi_scales, g_cluster_add_density_scale, g_cluster_add_density_top_k
     win_size = w_size
     threshold = thrd
     use_focus_bonus = focus_bonus
@@ -109,6 +110,7 @@ def set_key_conf(w_size=0.6, thrd=0.7, focus_bonus=True, layout_zoom='off',
     else:
         g_cluster_multi_scales = None
     g_cluster_add_density_scale = cluster_add_density_scale
+    g_cluster_add_density_top_k = cluster_add_density_top_k
 
 
 def keyframe_sample(video):
@@ -547,7 +549,7 @@ def select_key_zoom(text_boxes_list, video, question, text_list=None, object_box
     """
     global vlm_model, vlm_processor, threshold, win_size, use_focus_bonus, use_layout_zoom
     global g_crop_mode, g_density_top_k, g_density_nms
-    global g_cluster_expand_ratio, g_cluster_min_size_ratio, g_cluster_multi_scales, g_cluster_add_density_scale
+    global g_cluster_expand_ratio, g_cluster_min_size_ratio, g_cluster_multi_scales, g_cluster_add_density_scale, g_cluster_add_density_top_k
     h, w = video.shape[1:3]
     def resize_box(box, scale, h, w):
         x, y, bw, bh = box
@@ -753,7 +755,7 @@ def select_key_zoom(text_boxes_list, video, question, text_list=None, object_box
                 density_scale = g_cluster_add_density_scale
                 extra_win_sizes = [(int(density_scale * w), int(density_scale * h))]
                 extra_density = text_window_density_proposals(
-                    text_boxes, h, w, extra_win_sizes, top_k=1, nms_thresh=g_density_nms
+                    text_boxes, h, w, extra_win_sizes, top_k=g_cluster_add_density_top_k, nms_thresh=g_density_nms
                 )
                 for sx, sy, pw, ph in extra_density:
                     candidate = (sx, sy, pw, ph)
