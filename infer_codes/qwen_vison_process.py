@@ -551,6 +551,9 @@ def select_key_zoom(text_boxes_list, video, question, text_list=None, object_box
     global g_crop_mode, g_density_top_k, g_density_nms
     global g_cluster_expand_ratio, g_cluster_min_size_ratio, g_cluster_multi_scales, g_cluster_add_density_scale, g_cluster_add_density_top_k
     h, w = video.shape[1:3]
+    # 支持纯baseline：直接返回原始帧，无裁剪/缩放
+    if globals().get('g_crop_mode', None) == 'off':
+        return [np.array(f) for f in video]
     def resize_box(box, scale, h, w):
         x, y, bw, bh = box
         cx = x + bw / 2.0

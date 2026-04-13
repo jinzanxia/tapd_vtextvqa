@@ -1,0 +1,64 @@
+#!/bin/bash
+#SBATCH --job-name=sfa_baseline_nocrop
+#SBATCH --partition=a100
+#SBATCH --gpus=1
+#SBATCH --nodes=1
+#SBATCH --ntasks-per-node=1
+#SBATCH --mem=48G
+#SBATCH --time=04:00:00
+#SBATCH -o ./logs/baseline_nocrop.%N.%j.out
+#SBATCH -e ./logs/baseline_nocrop.%N.%j.err
+
+set -euo pipefail
+
+IMAGE="docker://xiaojino/sfa:v1.2"
+SCRIPT_PATH="$PWD/infer_codes/qwen.py"
+D2_CONFIG="$PWD/detectron2_coco.yaml"
+
+DATA_DIR="/mnt/fast/nobackup/scratch4weeks/nc324se/data/M4-ViteVQA"
+VIDEO_PATH="${DATA_DIR}/video/0.mp4"
+VTS_MODEL="${DATA_DIR}/GoMatching_pp_vitaeb_bovtext.pth"
+OUTPUT_DIR="./vis/baseline_nocrop_demo"
+
+mkdir -p ./logs ./vis
+
+echo "=========================================="
+echo "Run pure baseline (no crop/zoom)"
+echo "VIDEO_PATH: ${VIDEO_PATH}"
+echo "OUTPUT_DIR: ${OUTPUT_DIR}"
+echo "=========================================="
+
+if command -v apptainer >/dev/null 2>&1; then
+  CTR="apptainer"
+elif command -v singularity >/dev/null 2>&1; then
+  CTR="singularity"
+else
+  echo "Neither apptainer nor singularity found."
+  exit 1
+fi
+
+${CTR} exec --nv "${IMAGE}" bash -lc "
+  test -f '${SCRIPT_PATH}' || { echo 'Missing script: ${SCRIPT_PATH}'; exit 1; }
+  test -f '${D2_CONFIG}'   || { echo 'Missing detectron2 config: ${D2_CONFIG}'; exit 1; }
+  test -f '${VIDEO_PATH}'  || { echo 'Missing video: ${VIDEO_PATH}'; exit 1; }
+  test -f '${VTS_MODEL}'   || { echo 'Missing model: ${VTS_MODEL}'; exit 1; }
+  python -c 'import detectron2, adet, decord, cv2' || { echo 'Missing runtime deps in image'; exit 1; }
+"
+
+${CTR} exec --nv \
+  --env TOKENIZERS_PARALLELISM=false \
+  "${IMAGE}" \
+  bash -lc "
+    python '${SCRIPT_PATH}' \
+      --video-path '${VIDEO_PATH}' \
+      --output-dir '${OUTPUT_DIR}' \
+      --vts-config ./GoMatching/configs/GoMatching_PP_BOVText_vit.yaml \
+      --vts-model '${VTS_MODEL}' \
+      --d2-config '${D2_CONFIG}' \
+      --fps 1.0 \
+      --crop-mode off \
+      --top-k 2 \
+      --max-save 8
+  "
+
+echo "Baseline (no crop) finished. Outputs saved to ${OUTPUT_DIR}"
