@@ -2,12 +2,15 @@ import argparse
 import codecs
 import json
 import os
+import sys
 import time
 import warnings
 
 import torch
 from tqdm import tqdm
 from transformers import AutoProcessor, Qwen2_5_VLForConditionalGeneration
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 from metric import anls_metric, stvqa_acc_metric
 from qwen_vison_process import process_vision_info_nocrop
