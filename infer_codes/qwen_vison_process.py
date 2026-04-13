@@ -85,10 +85,13 @@ def detectron2_object_det(frames, predictor, class_ids=None):
 
 def set_key_conf(w_size=0.6, thrd=0.7, focus_bonus=True, layout_zoom='off',
                  kf_sample='off', kf_n_segments=8, kf_neighbors=1,
-                 crop_mode='fixed', density_top_k=4, density_nms=0.5):
+                 crop_mode='fixed', density_top_k=4, density_nms=0.5,
+                 cluster_expand_ratio=0.0, cluster_min_size_ratio=0.0,
+                 cluster_multi_scales=None, cluster_add_density_scale=0.0):
     global win_size, threshold, use_focus_bonus, use_layout_zoom
     global kf_sample_mode, kf_n_seg, kf_k
     global g_crop_mode, g_density_top_k, g_density_nms
+    global g_cluster_expand_ratio, g_cluster_min_size_ratio, g_cluster_multi_scales, g_cluster_add_density_scale
     win_size = w_size
     threshold = thrd
     use_focus_bonus = focus_bonus
@@ -99,6 +102,13 @@ def set_key_conf(w_size=0.6, thrd=0.7, focus_bonus=True, layout_zoom='off',
     g_crop_mode = crop_mode
     g_density_top_k = density_top_k
     g_density_nms = density_nms
+    g_cluster_expand_ratio = cluster_expand_ratio
+    g_cluster_min_size_ratio = cluster_min_size_ratio
+    if cluster_multi_scales:
+        g_cluster_multi_scales = [float(x) for x in cluster_multi_scales.split(",") if x.strip()]
+    else:
+        g_cluster_multi_scales = None
+    g_cluster_add_density_scale = cluster_add_density_scale
 
 
 def keyframe_sample(video):
@@ -463,13 +473,142 @@ def text_density_proposals(text_boxes, h, w, win_sizes, top_k=4, nms_thresh=0.5,
     return proposals
 
 
+def text_window_density_proposals(text_boxes, h, w, win_sizes, top_k=4, nms_thresh=0.5, stride_ratio=0.25):
+    """Legacy sliding-window text-density proposals."""
+    if not text_boxes:
+        return []
+
+    scale = 4
+    dh, dw = h // scale, w // scale
+    density = np.zeros((dh, dw), dtype=np.float32)
+    for bx1, by1, bx2, by2 in text_boxes:
+        y1d = max(0, int(by1 / scale))
+        y2d = min(dh, int(by2 / scale))
+        x1d = max(0, int(bx1 / scale))
+        x2d = min(dw, int(bx2 / scale))
+        if y2d > y1d and x2d > x1d:
+            density[y1d:y2d, x1d:x2d] += 1.0
+
+    integral = np.zeros((dh + 1, dw + 1), dtype=np.float64)
+    integral[1:, 1:] = np.cumsum(np.cumsum(density, axis=0), axis=1)
+
+    def window_sum(y1, x1, y2, x2):
+        return integral[y2, x2] - integral[y1, x2] - integral[y2, x1] + integral[y1, x1]
+
+    candidates = []
+    for ww, wh in win_sizes:
+        dww, dwh = ww // scale, wh // scale
+        if dww < 1 or dwh < 1:
+            continue
+        stride_x = max(1, int(dww * stride_ratio))
+        stride_y = max(1, int(dwh * stride_ratio))
+        for dy in range(0, dh - dwh + 1, stride_y):
+            for dx in range(0, dw - dww + 1, stride_x):
+                s = window_sum(dy, dx, dy + dwh, dx + dww)
+                if s > 0:
+                    candidates.append((s, dx * scale, dy * scale, ww, wh))
+
+    if not candidates:
+        return []
+
+    candidates.sort(key=lambda x: x[0], reverse=True)
+
+    def iou(a, b):
+        ax1, ay1 = a[1], a[2]
+        ax2, ay2 = a[1] + a[3], a[2] + a[4]
+        bx1, by1 = b[1], b[2]
+        bx2, by2 = b[1] + b[3], b[2] + b[4]
+        ix1, iy1 = max(ax1, bx1), max(ay1, by1)
+        ix2, iy2 = min(ax2, bx2), min(ay2, by2)
+        inter = max(0, ix2 - ix1) * max(0, iy2 - iy1)
+        area_a = (ax2 - ax1) * (ay2 - ay1)
+        area_b = (bx2 - bx1) * (by2 - by1)
+        union = area_a + area_b - inter
+        return inter / union if union > 0 else 0
+
+    kept = []
+    for c in candidates:
+        if all(iou(c, k) < nms_thresh for k in kept):
+            kept.append(c)
+        if len(kept) >= top_k:
+            break
+
+    proposals = []
+    for _, sx, sy, ww, wh in kept:
+        sx = max(0, min(sx, w - ww))
+        sy = max(0, min(sy, h - wh))
+        proposals.append((sx, sy, ww, wh))
+    return proposals
+
+
 def select_key_zoom(text_boxes_list, video, question, text_list=None, object_boxes_list=None):
     """
     object_boxes_list: list of list of [x1, y1, x2, y2] for each frame (可为None)
     """
     global vlm_model, vlm_processor, threshold, win_size, use_focus_bonus, use_layout_zoom
     global g_crop_mode, g_density_top_k, g_density_nms
+    global g_cluster_expand_ratio, g_cluster_min_size_ratio, g_cluster_multi_scales, g_cluster_add_density_scale
     h, w = video.shape[1:3]
+    def resize_box(box, scale, h, w):
+        x, y, bw, bh = box
+        cx = x + bw / 2.0
+        cy = y + bh / 2.0
+        new_w = bw * scale
+        new_h = bh * scale
+        x1 = max(0, int(round(cx - new_w / 2.0)))
+        y1 = max(0, int(round(cy - new_h / 2.0)))
+        x2 = min(w, int(round(cx + new_w / 2.0)))
+        y2 = min(h, int(round(cy + new_h / 2.0)))
+        if x2 <= x1:
+            x2 = min(w, x1 + 1)
+        if y2 <= y1:
+            y2 = min(h, y1 + 1)
+        return (x1, y1, x2 - x1, y2 - y1)
+
+    def apply_expand_and_min_size(box, h, w, expand_ratio=0.0, min_size_ratio=0.0):
+        x, y, bw, bh = box
+        x1, y1, x2, y2 = x, y, x + bw, y + bh
+        if expand_ratio > 0:
+            pad_w = bw * expand_ratio
+            pad_h = bh * expand_ratio
+            x1 -= pad_w
+            y1 -= pad_h
+            x2 += pad_w
+            y2 += pad_h
+
+        cur_w = x2 - x1
+        cur_h = y2 - y1
+        min_w = w * min_size_ratio
+        min_h = h * min_size_ratio
+        if cur_w < min_w:
+            extra = (min_w - cur_w) / 2.0
+            x1 -= extra
+            x2 += extra
+        if cur_h < min_h:
+            extra = (min_h - cur_h) / 2.0
+            y1 -= extra
+            y2 += extra
+
+        x1 = max(0, int(round(x1)))
+        y1 = max(0, int(round(y1)))
+        x2 = min(w, int(round(x2)))
+        y2 = min(h, int(round(y2)))
+        if x2 <= x1:
+            x2 = min(w, x1 + 1)
+        if y2 <= y1:
+            y2 = min(h, y1 + 1)
+        return (x1, y1, x2 - x1, y2 - y1)
+
+    def dedup_props(props):
+        out = []
+        seen = set()
+        for p in props:
+            key = tuple(map(int, p))
+            if key not in seen:
+                seen.add(key)
+                out.append(key)
+        return out
+
     def text_object_density_proposals(text_boxes, object_boxes, h, w, win_sizes, top_k=4, nms_thresh=0.5, stride_ratio=0.25):
         """
         先用文本框生成 density proposals，再扩展到包住 proposal+相关物体的最小外接矩形。
@@ -507,15 +646,24 @@ def select_key_zoom(text_boxes_list, video, question, text_list=None, object_box
                 all_y1 = min([py1]+[b[1] for b in related])
                 all_x2 = max([px2]+[b[2] for b in related])
                 all_y2 = max([py2]+[b[3] for b in related])
-                # clamp
-                all_x1 = max(0, all_x1)
-                all_y1 = max(0, all_y1)
-                all_x2 = min(w, all_x2)
-                all_y2 = min(h, all_y2)
-                new_props.append((all_x1, all_y1, all_x2-all_x1, all_y2-all_y1))
+                prop = (all_x1, all_y1, all_x2-all_x1, all_y2-all_y1)
             else:
-                new_props.append((px1, py1, ww, wh))
-        return new_props
+                prop = (px1, py1, ww, wh)
+
+            prop = apply_expand_and_min_size(
+                prop,
+                h,
+                w,
+                expand_ratio=g_cluster_expand_ratio,
+                min_size_ratio=g_cluster_min_size_ratio,
+            )
+
+            if g_cluster_multi_scales:
+                for scale in g_cluster_multi_scales:
+                    new_props.append(resize_box(prop, scale, h, w))
+            else:
+                new_props.append(prop)
+        return dedup_props(new_props)
     aspect_ratio = w / h
     key_frame_zoom = []
     
@@ -600,6 +748,17 @@ def select_key_zoom(text_boxes_list, video, question, text_list=None, object_box
                 candidate = (sx, sy, pw, ph)
                 if candidate not in crop_candidates:
                     crop_candidates.append(candidate)
+
+            if g_cluster_add_density_scale > 0:
+                density_scale = g_cluster_add_density_scale
+                extra_win_sizes = [(int(density_scale * w), int(density_scale * h))]
+                extra_density = text_window_density_proposals(
+                    text_boxes, h, w, extra_win_sizes, top_k=1, nms_thresh=g_density_nms
+                )
+                for sx, sy, pw, ph in extra_density:
+                    candidate = (sx, sy, pw, ph)
+                    if candidate not in crop_candidates:
+                        crop_candidates.append(candidate)
 
         # layout-guided: add text-centered crops based on bbox positions
         if use_layout_zoom != 'off' and text_boxes:

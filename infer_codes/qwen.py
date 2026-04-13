@@ -46,6 +46,14 @@ def get_parser():
                         help="crop mode: fixed (4 corners + layout), density (density only), hybrid (4 corners + density)")
     parser.add_argument("--density-top-k", type=int, default=4, help="top-K proposals for density crop mode")
     parser.add_argument("--density-nms", type=float, default=0.5, help="NMS IoU threshold for density proposals")
+    parser.add_argument("--cluster-expand-ratio", type=float, default=0.0,
+                        help="expand clustered/object-union proposal by this ratio on each side")
+    parser.add_argument("--cluster-min-size-ratio", type=float, default=0.0,
+                        help="enforce proposal min width/height as a fraction of frame size")
+    parser.add_argument("--cluster-multi-scales", type=str, default=None,
+                        help="comma-separated scale factors for clustered proposals, e.g. '1.0,1.5'")
+    parser.add_argument("--cluster-add-density-scale", type=float, default=0.0,
+                        help="append one sliding-window density proposal of this relative scale, e.g. 0.6")
     parser.add_argument("--d2-config", type=str, default="detectron2_coco.yaml", help="Detectron2 config file (COCO)")
     parser.add_argument("--d2-weights", type=str, default=None, help="Detectron2 model weights (overrides config)")
     parser.add_argument("--d2-obj-classes", type=str, default=None, help="Comma-separated COCO class ids to keep (e.g. '0,2,3')")
@@ -60,7 +68,11 @@ if __name__ == "__main__":
 
     set_key_conf(w_size=WIN_SIZE, thrd=THRESHOLD, focus_bonus=args.use_focus_bonus, layout_zoom=args.layout_zoom,
                  kf_sample=args.kf_sample, kf_n_segments=args.kf_segments, kf_neighbors=args.kf_neighbors,
-                 crop_mode=args.crop_mode, density_top_k=args.density_top_k, density_nms=args.density_nms)
+                 crop_mode=args.crop_mode, density_top_k=args.density_top_k, density_nms=args.density_nms,
+                 cluster_expand_ratio=args.cluster_expand_ratio,
+                 cluster_min_size_ratio=args.cluster_min_size_ratio,
+                 cluster_multi_scales=args.cluster_multi_scales,
+                 cluster_add_density_scale=args.cluster_add_density_scale)
 
     anls_metr = anls_metric.ANLS_metric()
     stvqa_acc_metr = stvqa_acc_metric.STVQAAcc_metric()
