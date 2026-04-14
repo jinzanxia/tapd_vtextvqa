@@ -62,6 +62,10 @@ def get_parser():
                         help="fixed anchored window scale as a fraction of frame size")
     parser.add_argument("--text-anchor-scales", type=str, default="0.4,0.6,0.8",
                         help="comma-separated candidate scales for adaptive anchored windows")
+    parser.add_argument("--text-rerank-weight", type=float, default=0.0,
+                        help="bonus weight for reranking proposals using question-relevant text clusters")
+    parser.add_argument("--text-rerank-mode", type=str, default="off", choices=["off", "token", "cluster"],
+                        help="use Qwen to score OCR token/cluster relevance for proposal reranking")
     parser.add_argument("--d2-config", type=str, default="detectron2_coco.yaml", help="Detectron2 config file (COCO)")
     parser.add_argument("--d2-weights", type=str, default=None, help="Detectron2 model weights (overrides config)")
     parser.add_argument("--d2-obj-classes", type=str, default=None, help="Comma-separated COCO class ids to keep (e.g. '0,2,3')")
@@ -84,7 +88,9 @@ if __name__ == "__main__":
                  cluster_add_density_top_k=args.cluster_add_density_top_k,
                  text_anchor_mode=args.text_anchor_mode,
                  text_anchor_fixed_scale=args.text_anchor_fixed_scale,
-                 text_anchor_scales=args.text_anchor_scales)
+                 text_anchor_scales=args.text_anchor_scales,
+                 text_rerank_weight=args.text_rerank_weight,
+                 text_rerank_mode=args.text_rerank_mode)
 
     anls_metr = anls_metric.ANLS_metric()
     stvqa_acc_metr = stvqa_acc_metric.STVQAAcc_metric()

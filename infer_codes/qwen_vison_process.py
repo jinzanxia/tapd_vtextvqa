@@ -21,6 +21,7 @@ from torchvision import io, transforms
 from torchvision.transforms import InterpolationMode
 import json
 import random
+import re
 import numpy as np
 
 # gomatching
@@ -89,12 +90,13 @@ def set_key_conf(w_size=0.6, thrd=0.7, focus_bonus=True, layout_zoom='off',
                  cluster_expand_ratio=0.0, cluster_min_size_ratio=0.0,
                  cluster_multi_scales=None, cluster_add_density_scale=0.0,
                  cluster_add_density_top_k=1, text_anchor_mode='off',
-                 text_anchor_fixed_scale=0.4, text_anchor_scales='0.4,0.6,0.8'):
+                 text_anchor_fixed_scale=0.4, text_anchor_scales='0.4,0.6,0.8',
+                 text_rerank_weight=0.0, text_rerank_mode='off'):
     global win_size, threshold, use_focus_bonus, use_layout_zoom
     global kf_sample_mode, kf_n_seg, kf_k
     global g_crop_mode, g_density_top_k, g_density_nms
     global g_cluster_expand_ratio, g_cluster_min_size_ratio, g_cluster_multi_scales, g_cluster_add_density_scale, g_cluster_add_density_top_k
-    global g_text_anchor_mode, g_text_anchor_fixed_scale, g_text_anchor_scales
+    global g_text_anchor_mode, g_text_anchor_fixed_scale, g_text_anchor_scales, g_text_rerank_weight, g_text_rerank_mode
     win_size = w_size
     threshold = thrd
     use_focus_bonus = focus_bonus
@@ -116,6 +118,91 @@ def set_key_conf(w_size=0.6, thrd=0.7, focus_bonus=True, layout_zoom='off',
     g_text_anchor_mode = text_anchor_mode
     g_text_anchor_fixed_scale = text_anchor_fixed_scale
     g_text_anchor_scales = [float(x) for x in text_anchor_scales.split(",") if x.strip()]
+    g_text_rerank_weight = text_rerank_weight
+    g_text_rerank_mode = text_rerank_mode
+
+
+def build_text_clusters(text_boxes, frame_texts=None):
+    if not text_boxes:
+        return []
+
+    boxes = [list(map(int, b)) for b in text_boxes]
+    texts = frame_texts if frame_texts and len(frame_texts) == len(text_boxes) else [""] * len(text_boxes)
+    n = len(boxes)
+    parents = list(range(n))
+
+    def find(x):
+        while parents[x] != x:
+            parents[x] = parents[parents[x]]
+            x = parents[x]
+        return x
+
+    def union(a, b):
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            parents[rb] = ra
+
+    def overlap_1d(a1, a2, b1, b2):
+        return max(0, min(a2, b2) - max(a1, b1))
+
+    def should_merge(box_a, box_b):
+        ax1, ay1, ax2, ay2 = box_a
+        bx1, by1, bx2, by2 = box_b
+        aw, ah = max(1, ax2 - ax1), max(1, ay2 - ay1)
+        bw, bh = max(1, bx2 - bx1), max(1, by2 - by1)
+        x_overlap = overlap_1d(ax1, ax2, bx1, bx2)
+        y_overlap = overlap_1d(ay1, ay2, by1, by2)
+        min_h = max(1, min(ah, bh))
+        min_w = max(1, min(aw, bw))
+
+        horiz_gap = max(0, max(ax1, bx1) - min(ax2, bx2))
+        same_line = y_overlap / min_h >= 0.4 and horiz_gap <= 1.5 * max(ah, bh)
+
+        vert_gap = max(0, max(ay1, by1) - min(ay2, by2))
+        same_column = x_overlap / min_w >= 0.3 and vert_gap <= 1.0 * max(ah, bh)
+
+        inter = x_overlap * y_overlap
+        area_a = aw * ah
+        area_b = bw * bh
+        union_area = area_a + area_b - inter
+        iou = inter / union_area if union_area > 0 else 0.0
+        acx, acy = (ax1 + ax2) / 2.0, (ay1 + ay2) / 2.0
+        bcx, bcy = (bx1 + bx2) / 2.0, (by1 + by2) / 2.0
+        center_close = abs(acx - bcx) <= 2.0 * max(aw, bw) and abs(acy - bcy) <= 1.5 * max(ah, bh)
+        return iou > 0 or same_line or same_column or center_close
+
+    for i in range(n):
+        for j in range(i + 1, n):
+            if should_merge(boxes[i], boxes[j]):
+                union(i, j)
+
+    grouped = {}
+    for idx, box in enumerate(boxes):
+        root = find(idx)
+        grouped.setdefault(root, {"boxes": [], "texts": []})
+        grouped[root]["boxes"].append(box)
+        txt = texts[idx].strip()
+        if txt:
+            grouped[root]["texts"].append(txt)
+
+    clusters = []
+    for item in grouped.values():
+        cluster_boxes = item["boxes"]
+        x1 = min(b[0] for b in cluster_boxes)
+        y1 = min(b[1] for b in cluster_boxes)
+        x2 = max(b[2] for b in cluster_boxes)
+        y2 = max(b[3] for b in cluster_boxes)
+        cluster_area = sum(max(1, (b[2] - b[0]) * (b[3] - b[1])) for b in cluster_boxes)
+        union_area = max(1, (x2 - x1) * (y2 - y1))
+        clusters.append({
+            "box_xyxy": (x1, y1, x2, y2),
+            "proposal_xywh": (x1, y1, x2 - x1, y2 - y1),
+            "texts": item["texts"],
+            "text": " ".join(item["texts"]).strip(),
+            "score": (len(cluster_boxes), cluster_area / union_area, cluster_area, -y1, -x1),
+        })
+    clusters.sort(key=lambda c: c["score"], reverse=True)
+    return clusters
 
 
 def keyframe_sample(video):
@@ -397,87 +484,106 @@ def text_density_proposals(text_boxes, h, w, win_sizes, top_k=4, nms_thresh=0.5,
     if not text_boxes:
         return []
 
-    boxes = [list(map(int, b)) for b in text_boxes]
-    n = len(boxes)
-    parents = list(range(n))
+    proposals = []
+    clusters = build_text_clusters(text_boxes)
+    for cluster in clusters[:top_k]:
+        proposals.append(cluster["proposal_xywh"])
+    return proposals
 
-    def find(x):
-        while parents[x] != x:
-            parents[x] = parents[parents[x]]
-            x = parents[x]
-        return x
 
-    def union(a, b):
-        ra, rb = find(a), find(b)
-        if ra != rb:
-            parents[rb] = ra
+def build_text_items(text_boxes, frame_texts):
+    if not text_boxes or not frame_texts:
+        return []
+    items = []
+    for box, text in zip(text_boxes, frame_texts):
+        text = (text or "").strip()
+        if not text:
+            continue
+        items.append({
+            "box_xyxy": tuple(map(int, box)),
+            "text": text,
+        })
+    return items
 
-    def overlap_1d(a1, a2, b1, b2):
-        return max(0, min(a2, b2) - max(a1, b1))
 
-    def should_merge(box_a, box_b):
-        ax1, ay1, ax2, ay2 = box_a
-        bx1, by1, bx2, by2 = box_b
-        aw, ah = max(1, ax2 - ax1), max(1, ay2 - ay1)
-        bw, bh = max(1, bx2 - bx1), max(1, by2 - by1)
+def get_text_rerank_items(text_boxes, frame_texts, mode):
+    if mode == 'token':
+        return build_text_items(text_boxes, frame_texts)
+    if mode == 'cluster':
+        clusters = build_text_clusters(text_boxes, frame_texts)
+        return [{"box_xyxy": c["box_xyxy"], "text": c["text"]} for c in clusters if c["text"]]
+    return []
 
-        x_overlap = overlap_1d(ax1, ax2, bx1, bx2)
-        y_overlap = overlap_1d(ay1, ay2, by1, by2)
-        min_h = max(1, min(ah, bh))
-        min_w = max(1, min(aw, bw))
 
-        # Same text line / nearby words.
-        horiz_gap = max(0, max(ax1, bx1) - min(ax2, bx2))
-        same_line = y_overlap / min_h >= 0.4 and horiz_gap <= 1.5 * max(ah, bh)
+def score_text_relevance_with_qwen(question, texts, mode):
+    global vlm_model, vlm_processor, a_token_id
+    if not texts:
+        return []
 
-        # Same vertical stack / signboard.
-        vert_gap = max(0, max(ay1, by1) - min(ay2, by2))
-        same_column = x_overlap / min_w >= 0.3 and vert_gap <= 1.0 * max(ah, bh)
+    cache = globals().setdefault("_text_rerank_cache", {})
+    cached_scores = {}
+    uncached = []
+    prompt_texts = []
 
-        # Direct overlap or very close centers.
-        inter = x_overlap * y_overlap
-        area_a = aw * ah
-        area_b = bw * bh
-        union_area = area_a + area_b - inter
-        iou = inter / union_area if union_area > 0 else 0.0
-        acx, acy = (ax1 + ax2) / 2.0, (ay1 + ay2) / 2.0
-        bcx, bcy = (bx1 + bx2) / 2.0, (by1 + by2) / 2.0
-        center_close = (
-            abs(acx - bcx) <= 2.0 * max(aw, bw)
-            and abs(acy - bcy) <= 1.5 * max(ah, bh)
+    for text in texts:
+        clean_text = (text or "").strip()
+        if not clean_text:
+            cached_scores[text] = 0.0
+            continue
+        key = (mode, question, clean_text)
+        if key in cache:
+            cached_scores[text] = cache[key]
+            continue
+        uncached.append((text, key, clean_text))
+        if mode == 'token':
+            item_label = "OCR token"
+            guidance = "Can this single OCR token, by itself or as a key clue, help answer the question?"
+        else:
+            item_label = "OCR text span"
+            guidance = "Can this OCR text span provide enough useful evidence to help answer the question?"
+        prompt_texts.append(
+            f"Question: {question}\n"
+            f"{item_label}: {clean_text}\n"
+            f"{guidance}\n"
+            "A. yes\n"
+            "B. no\n"
+            "Answer with only A or B."
         )
 
-        return iou > 0 or same_line or same_column or center_close
+    if prompt_texts:
+        inputs = vlm_processor(text=prompt_texts, padding=True, return_tensors="pt").to(vlm_model.device)
+        with torch.no_grad():
+            outputs = vlm_model(**inputs)
+            logits = outputs.logits[:, -1, :]
+            a_probabilities = torch.nn.functional.softmax(logits, dim=-1)[:, a_token_id]
+        for (orig_text, key, _), score in zip(uncached, a_probabilities.tolist()):
+            cache[key] = float(score)
+            cached_scores[orig_text] = float(score)
 
-    for i in range(n):
-        for j in range(i + 1, n):
-            if should_merge(boxes[i], boxes[j]):
-                union(i, j)
+    return [cached_scores.get(text, 0.0) for text in texts]
 
-    clusters = {}
-    for idx, box in enumerate(boxes):
-        root = find(idx)
-        clusters.setdefault(root, []).append(box)
 
-    proposals = []
-    scored = []
-    for cluster_boxes in clusters.values():
-        x1 = max(0, min(b[0] for b in cluster_boxes))
-        y1 = max(0, min(b[1] for b in cluster_boxes))
-        x2 = min(w, max(b[2] for b in cluster_boxes))
-        y2 = min(h, max(b[3] for b in cluster_boxes))
-        if x2 <= x1 or y2 <= y1:
+def proposal_text_item_bonus(proposal_xywh, scored_items, weight):
+    if weight <= 0 or not scored_items:
+        return 0.0
+    px1, py1, pw, ph = proposal_xywh
+    px2, py2 = px1 + pw, py1 + ph
+    best = 0.0
+    for item in scored_items:
+        rel = item.get("relevance", 0.0)
+        if rel <= 0:
             continue
-
-        cluster_area = sum(max(1, (b[2] - b[0]) * (b[3] - b[1])) for b in cluster_boxes)
-        union_area = max(1, (x2 - x1) * (y2 - y1))
-        score = (len(cluster_boxes), cluster_area / union_area, cluster_area, -y1, -x1)
-        scored.append((score, (x1, y1, x2 - x1, y2 - y1)))
-
-    scored.sort(key=lambda x: x[0], reverse=True)
-    for _, prop in scored[:top_k]:
-        proposals.append(prop)
-    return proposals
+        cx1, cy1, cx2, cy2 = item["box_xyxy"]
+        ix1, iy1 = max(px1, cx1), max(py1, cy1)
+        ix2, iy2 = min(px2, cx2), min(py2, cy2)
+        inter = max(0, ix2 - ix1) * max(0, iy2 - iy1)
+        cluster_area = max(1, (cx2 - cx1) * (cy2 - cy1))
+        coverage = inter / cluster_area
+        ccx, ccy = (cx1 + cx2) / 2.0, (cy1 + cy2) / 2.0
+        center_inside = 1.0 if (px1 <= ccx <= px2 and py1 <= ccy <= py2) else 0.0
+        score = rel * max(coverage, center_inside * 0.8)
+        best = max(best, score)
+    return weight * best
 
 
 def anchored_text_windows(cluster_props, h, w, mode='off', fixed_scale=0.4, adaptive_scales=None):
@@ -604,7 +710,7 @@ def select_key_zoom(text_boxes_list, video, question, text_list=None, object_box
     global vlm_model, vlm_processor, threshold, win_size, use_focus_bonus, use_layout_zoom
     global g_crop_mode, g_density_top_k, g_density_nms
     global g_cluster_expand_ratio, g_cluster_min_size_ratio, g_cluster_multi_scales, g_cluster_add_density_scale, g_cluster_add_density_top_k
-    global g_text_anchor_mode, g_text_anchor_fixed_scale, g_text_anchor_scales
+    global g_text_anchor_mode, g_text_anchor_fixed_scale, g_text_anchor_scales, g_text_rerank_weight, g_text_rerank_mode
     h, w = video.shape[1:3]
     # 支持纯baseline：直接返回原始帧，无裁剪/缩放
     if globals().get('g_crop_mode', None) == 'off':
@@ -752,6 +858,15 @@ def select_key_zoom(text_boxes_list, video, question, text_list=None, object_box
     for f_id, (text_boxes, frame) in enumerate(zip(text_boxes_list, video)):
         object_boxes = object_boxes_list[f_id] if object_boxes_list is not None and f_id < len(object_boxes_list) else None
         frame_texts = text_list[f_id] if text_list and f_id < len(text_list) else []
+        rerank_items = get_text_rerank_items(text_boxes, frame_texts, g_text_rerank_mode)
+        if g_text_rerank_weight > 0 and rerank_items:
+            rerank_scores = score_text_relevance_with_qwen(
+                question,
+                [item["text"] for item in rerank_items],
+                g_text_rerank_mode,
+            )
+            for item, score in zip(rerank_items, rerank_scores):
+                item["relevance"] = score
         # check if any OCR text in this frame overlaps with question words
         text_bonus = 0.0
         if use_focus_bonus and frame_texts:
@@ -789,6 +904,16 @@ def select_key_zoom(text_boxes_list, video, question, text_list=None, object_box
                         logits = outputs.logits[:, -1, :]
                         a_probabilities = torch.nn.functional.softmax(logits, dim=-1)[:, a_token_id]
                         a_probabilities = a_probabilities + text_bonus
+                        if g_text_rerank_weight > 0 and rerank_items:
+                            rerank_bonus = torch.tensor(
+                                [
+                                    proposal_text_item_bonus(p, rerank_items, g_text_rerank_weight)
+                                    for p in proposals
+                                ],
+                                device=a_probabilities.device,
+                                dtype=a_probabilities.dtype,
+                            )
+                            a_probabilities = a_probabilities + rerank_bonus
                         max_val, max_id = torch.max(a_probabilities, dim=0)
                         if max_val > threshold:
                             key_frame_zoom.append(np.array(sub_imgs[max_id].resize((w, h))))
@@ -850,6 +975,7 @@ def select_key_zoom(text_boxes_list, video, question, text_list=None, object_box
         sub_imgs = []
         inf_imgs = []
         conversations = []
+        proposal_meta = []
         for s_id, (s_x, s_y, base_w, base_h) in enumerate(crop_candidates):
             e_x, e_y = s_x + base_w, s_y + base_h
             relevant_boxes = []
@@ -900,6 +1026,7 @@ def select_key_zoom(text_boxes_list, video, question, text_list=None, object_box
             cropped_img = cropped_img.resize((win_w, win_h))
             inf_imgs.append(cropped_img)
             conversations.append(conversation)
+            proposal_meta.append((extended_x1, extended_y1, extended_x2 - extended_x1, extended_y2 - extended_y1))
         
         
         if len(sub_imgs) > 0:
@@ -912,6 +1039,16 @@ def select_key_zoom(text_boxes_list, video, question, text_list=None, object_box
                 ### threshold
                 a_probabilities = torch.nn.functional.softmax(logits, dim=-1)[:, a_token_id]
                 a_probabilities = a_probabilities + text_bonus
+                if g_text_rerank_weight > 0 and proposal_meta and rerank_items:
+                    rerank_bonus = torch.tensor(
+                        [
+                            proposal_text_item_bonus(p, rerank_items, g_text_rerank_weight)
+                            for p in proposal_meta
+                        ],
+                        device=a_probabilities.device,
+                        dtype=a_probabilities.dtype,
+                    )
+                    a_probabilities = a_probabilities + rerank_bonus
                 max_val, max_id = torch.max(a_probabilities, dim=0)
                 if max_val > threshold:
                     key_frame_zoom.append(np.array(sub_imgs[max_id].resize((w, h))))
