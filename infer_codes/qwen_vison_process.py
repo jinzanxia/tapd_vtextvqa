@@ -398,6 +398,9 @@ def init_ocrmodel(cfg_path, model_path, device, model, processor):
     tracker_visualizer = TextTrackingVisualizer(metadata, cfg, instance_mode)
     vlm_model = model
     vlm_processor = processor
+    # 兼容Qwen2.5-VL Flash Attention，强制左padding
+    if hasattr(vlm_processor, 'tokenizer'):
+        vlm_processor.tokenizer.padding_side = 'left'
     
 
 def ocr_det(video):
