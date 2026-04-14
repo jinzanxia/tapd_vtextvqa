@@ -88,11 +88,13 @@ def set_key_conf(w_size=0.6, thrd=0.7, focus_bonus=True, layout_zoom='off',
                  crop_mode='fixed', density_top_k=4, density_nms=0.5,
                  cluster_expand_ratio=0.0, cluster_min_size_ratio=0.0,
                  cluster_multi_scales=None, cluster_add_density_scale=0.0,
-                 cluster_add_density_top_k=1):
+                 cluster_add_density_top_k=1, text_anchor_mode='off',
+                 text_anchor_fixed_scale=0.4, text_anchor_scales='0.4,0.6,0.8'):
     global win_size, threshold, use_focus_bonus, use_layout_zoom
     global kf_sample_mode, kf_n_seg, kf_k
     global g_crop_mode, g_density_top_k, g_density_nms
     global g_cluster_expand_ratio, g_cluster_min_size_ratio, g_cluster_multi_scales, g_cluster_add_density_scale, g_cluster_add_density_top_k
+    global g_text_anchor_mode, g_text_anchor_fixed_scale, g_text_anchor_scales
     win_size = w_size
     threshold = thrd
     use_focus_bonus = focus_bonus
@@ -111,6 +113,9 @@ def set_key_conf(w_size=0.6, thrd=0.7, focus_bonus=True, layout_zoom='off',
         g_cluster_multi_scales = None
     g_cluster_add_density_scale = cluster_add_density_scale
     g_cluster_add_density_top_k = cluster_add_density_top_k
+    g_text_anchor_mode = text_anchor_mode
+    g_text_anchor_fixed_scale = text_anchor_fixed_scale
+    g_text_anchor_scales = [float(x) for x in text_anchor_scales.split(",") if x.strip()]
 
 
 def keyframe_sample(video):
@@ -475,6 +480,55 @@ def text_density_proposals(text_boxes, h, w, win_sizes, top_k=4, nms_thresh=0.5,
     return proposals
 
 
+def anchored_text_windows(cluster_props, h, w, mode='off', fixed_scale=0.4, adaptive_scales=None):
+    """Convert cluster union boxes into fixed-size windows while preserving rough relative position."""
+    if mode == 'off':
+        return list(cluster_props)
+    if adaptive_scales is None or len(adaptive_scales) == 0:
+        adaptive_scales = [0.4, 0.6, 0.8]
+
+    def anchor_window(prop, scale):
+        x1, y1, bw, bh = prop
+        x2, y2 = x1 + bw, y1 + bh
+        ww = max(1, min(w, int(round(scale * w))))
+        wh = max(1, min(h, int(round(scale * h))))
+        cx = (x1 + x2) / 2.0
+        cy = (y1 + y2) / 2.0
+
+        rx = cx / max(w, 1)
+        ry = cy / max(h, 1)
+        sx = int(round(cx - rx * ww))
+        sy = int(round(cy - ry * wh))
+
+        # Keep the cluster fully inside the anchored window.
+        if sx > x1:
+            sx = x1
+        if sx + ww < x2:
+            sx = x2 - ww
+        if sy > y1:
+            sy = y1
+        if sy + wh < y2:
+            sy = y2 - wh
+
+        sx = max(0, min(sx, w - ww))
+        sy = max(0, min(sy, h - wh))
+        return (sx, sy, ww, wh)
+
+    windows = []
+    for prop in cluster_props:
+        _, _, bw, bh = prop
+        if mode == 'adaptive':
+            scale = adaptive_scales[-1]
+            for cand in adaptive_scales:
+                if bw <= cand * w and bh <= cand * h:
+                    scale = cand
+                    break
+        else:
+            scale = fixed_scale
+        windows.append(anchor_window(prop, scale))
+    return windows
+
+
 def text_window_density_proposals(text_boxes, h, w, win_sizes, top_k=4, nms_thresh=0.5, stride_ratio=0.25):
     """Legacy sliding-window text-density proposals."""
     if not text_boxes:
@@ -550,6 +604,7 @@ def select_key_zoom(text_boxes_list, video, question, text_list=None, object_box
     global vlm_model, vlm_processor, threshold, win_size, use_focus_bonus, use_layout_zoom
     global g_crop_mode, g_density_top_k, g_density_nms
     global g_cluster_expand_ratio, g_cluster_min_size_ratio, g_cluster_multi_scales, g_cluster_add_density_scale, g_cluster_add_density_top_k
+    global g_text_anchor_mode, g_text_anchor_fixed_scale, g_text_anchor_scales
     h, w = video.shape[1:3]
     # 支持纯baseline：直接返回原始帧，无裁剪/缩放
     if globals().get('g_crop_mode', None) == 'off':
@@ -620,6 +675,14 @@ def select_key_zoom(text_boxes_list, video, question, text_list=None, object_box
         相关物体定义：与 proposal IoU>0.1 或中心点落在 proposal 内。
         """
         proposals = text_density_proposals(text_boxes, h, w, win_sizes, top_k=top_k, nms_thresh=nms_thresh, stride_ratio=stride_ratio)
+        proposals = anchored_text_windows(
+            proposals,
+            h,
+            w,
+            mode=g_text_anchor_mode,
+            fixed_scale=g_text_anchor_fixed_scale,
+            adaptive_scales=g_text_anchor_scales,
+        )
         if not object_boxes or not proposals:
             return proposals
         def iou(boxA, boxB):

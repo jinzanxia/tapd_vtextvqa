@@ -56,6 +56,12 @@ def get_parser():
                         help="append one sliding-window density proposal of this relative scale, e.g. 0.6")
     parser.add_argument("--cluster-add-density-top-k", type=int, default=1,
                         help="number of extra sliding-window density proposals to append when cluster-add-density-scale > 0")
+    parser.add_argument("--text-anchor-mode", type=str, default="off", choices=["off", "fixed", "adaptive"],
+                        help="convert text-cluster boxes into anchored fixed-size windows")
+    parser.add_argument("--text-anchor-fixed-scale", type=float, default=0.4,
+                        help="fixed anchored window scale as a fraction of frame size")
+    parser.add_argument("--text-anchor-scales", type=str, default="0.4,0.6,0.8",
+                        help="comma-separated candidate scales for adaptive anchored windows")
     parser.add_argument("--d2-config", type=str, default="detectron2_coco.yaml", help="Detectron2 config file (COCO)")
     parser.add_argument("--d2-weights", type=str, default=None, help="Detectron2 model weights (overrides config)")
     parser.add_argument("--d2-obj-classes", type=str, default=None, help="Comma-separated COCO class ids to keep (e.g. '0,2,3')")
@@ -75,7 +81,10 @@ if __name__ == "__main__":
                  cluster_min_size_ratio=args.cluster_min_size_ratio,
                  cluster_multi_scales=args.cluster_multi_scales,
                  cluster_add_density_scale=args.cluster_add_density_scale,
-                 cluster_add_density_top_k=args.cluster_add_density_top_k)
+                 cluster_add_density_top_k=args.cluster_add_density_top_k,
+                 text_anchor_mode=args.text_anchor_mode,
+                 text_anchor_fixed_scale=args.text_anchor_fixed_scale,
+                 text_anchor_scales=args.text_anchor_scales)
 
     anls_metr = anls_metric.ANLS_metric()
     stvqa_acc_metr = stvqa_acc_metric.STVQAAcc_metric()
