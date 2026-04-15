@@ -930,14 +930,11 @@ def select_key_zoom(text_boxes_list, video, question, text_list=None, object_box
             (w - win_w, h - win_h, win_w, win_h),
         ]
 
-        # hybrid mode: append density+object proposals as extra crops alongside corners
-        if g_crop_mode == 'hybrid' and text_boxes:
+        # hybrid ablation: 只用单一 window size
+        if g_crop_mode == 'hybrid_04' and text_boxes:
             d_win_sizes = [
                 (int(0.4 * w), int(0.4 * h)),
-                (int(0.6 * w), int(0.6 * h)),
-                (int(0.8 * w), int(0.8 * h)),
             ]
-            # 只用滑窗密度 proposals，不混入 text cluster proposals
             d_proposals = text_window_density_proposals(
                 text_boxes, h, w, d_win_sizes, top_k=g_density_top_k, nms_thresh=g_density_nms
             )
@@ -946,16 +943,29 @@ def select_key_zoom(text_boxes_list, video, question, text_list=None, object_box
                 if candidate not in crop_candidates:
                     crop_candidates.append(candidate)
 
-            if g_cluster_add_density_scale > 0:
-                density_scale = g_cluster_add_density_scale
-                extra_win_sizes = [(int(density_scale * w), int(density_scale * h))]
-                extra_density = text_window_density_proposals(
-                    text_boxes, h, w, extra_win_sizes, top_k=g_cluster_add_density_top_k, nms_thresh=g_density_nms
-                )
-                for sx, sy, pw, ph in extra_density:
-                    candidate = (sx, sy, pw, ph)
-                    if candidate not in crop_candidates:
-                        crop_candidates.append(candidate)
+        if g_crop_mode == 'hybrid_06' and text_boxes:
+            d_win_sizes = [
+                (int(0.6 * w), int(0.6 * h)),
+            ]
+            d_proposals = text_window_density_proposals(
+                text_boxes, h, w, d_win_sizes, top_k=g_density_top_k, nms_thresh=g_density_nms
+            )
+            for sx, sy, pw, ph in d_proposals:
+                candidate = (sx, sy, pw, ph)
+                if candidate not in crop_candidates:
+                    crop_candidates.append(candidate)
+
+        if g_crop_mode == 'hybrid_08' and text_boxes:
+            d_win_sizes = [
+                (int(0.8 * w), int(0.8 * h)),
+            ]
+            d_proposals = text_window_density_proposals(
+                text_boxes, h, w, d_win_sizes, top_k=g_density_top_k, nms_thresh=g_density_nms
+            )
+            for sx, sy, pw, ph in d_proposals:
+                candidate = (sx, sy, pw, ph)
+                if candidate not in crop_candidates:
+                    crop_candidates.append(candidate)
 
         # layout-guided: add text-centered crops based on bbox positions
         if use_layout_zoom != 'off' and text_boxes:
