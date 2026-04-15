@@ -9,18 +9,84 @@
 #SBATCH --time=48:00:00
 
 # 激活环境（请根据实际环境名称修改）
-source ~/.bashrc
-conda activate your_env_name
 
 # 创建日志目录
-mkdir -p logs
 
 # 运行 ablation 实验
-for mode in hybrid_04 hybrid_06 hybrid_08; do
-    echo "Running $mode"
-    python3 main.py \
-        --crop-mode $mode \
-        --other-args ... \
-        --output results/${mode}_result.json
-    echo "$mode done"
-done
+#!/bin/bash
+#SBATCH --job-name=hybrid_ablation
+#SBATCH --partition=a100
+#SBATCH --gpus=1
+#SBATCH --nodes=1
+#SBATCH --ntasks-per-node=1
+#SBATCH --mem=80G
+#SBATCH --time=48:00:00
+#SBATCH --array=0-2
+#SBATCH -o ./logs/hybrid_ablation_%a.%N.%j.out
+#SBATCH -e ./logs/hybrid_ablation_%a.%N.%j.err
+
+set -euo pipefail
+
+IMAGE="docker://xiaojino/sfa:v1.2"
+SCRIPT_PATH="$PWD/infer_codes/qwen.py"
+
+DATA_DIR="/mnt/fast/nobackup/scratch4weeks/nc324se/data/M4-ViteVQA"
+GT_JSON="${DATA_DIR}/Annotations/ViteVQA_0.0.2_t1s1val.json"
+VIDEO_DIR="${DATA_DIR}/video"
+VTS_MODEL="${DATA_DIR}/GoMatching_pp_vitaeb_bovtext.pth"
+
+mkdir -p ./logs ./results
+
+EXPERIMENT_NAMES=("hybrid_04" "hybrid_06" "hybrid_08")
+CROP_MODES=("hybrid_04" "hybrid_06" "hybrid_08")
+
+case ${SLURM_ARRAY_TASK_ID} in
+    0)
+        EXTRA_ARGS="--no-ocr-text --no-focus-bonus --layout-zoom off --crop-mode hybrid_04 --density-top-k 4 --density-nms 0.5"
+        ;;
+    1)
+        EXTRA_ARGS="--no-ocr-text --no-focus-bonus --layout-zoom off --crop-mode hybrid_06 --density-top-k 4 --density-nms 0.5"
+        ;;
+    2)
+        EXTRA_ARGS="--no-ocr-text --no-focus-bonus --layout-zoom off --crop-mode hybrid_08 --density-top-k 4 --density-nms 0.5"
+        ;;
+esac
+
+EXP_NAME="${EXPERIMENT_NAMES[${SLURM_ARRAY_TASK_ID}]}"
+OUTPUT_JSON="./results/hybrid_ablation_${EXP_NAME}.json"
+
+echo "=========================================="
+echo "Hybrid ablation experiment: ${EXP_NAME}"
+echo "SLURM_ARRAY_TASK_ID: ${SLURM_ARRAY_TASK_ID}"
+echo "EXTRA_ARGS: ${EXTRA_ARGS}"
+echo "OUTPUT_JSON: ${OUTPUT_JSON}"
+echo "=========================================="
+
+if command -v apptainer >/dev/null 2>&1; then
+    CTR="apptainer"
+elif command -v singularity >/dev/null 2>&1; then
+    CTR="singularity"
+else
+    echo "Neither apptainer nor singularity found."
+    exit 1
+fi
+
+${CTR} exec --nv "${IMAGE}" bash -lc "
+    test -f '${SCRIPT_PATH}' || { echo 'Missing script: ${SCRIPT_PATH}'; exit 1; }
+    test -f '${GT_JSON}'     || { echo 'Missing gt json: ${GT_JSON}'; exit 1; }
+    test -d '${VIDEO_DIR}'   || { echo 'Missing video dir: ${VIDEO_DIR}'; exit 1; }
+    test -f '${VTS_MODEL}'   || { echo 'Missing model: ${VTS_MODEL}'; exit 1; }
+    python -c 'import detectron2, adet' || { echo 'Missing detectron2/adet in image'; exit 1; }
+"
+
+${CTR} exec --nv \
+    --env TOKENIZERS_PARALLELISM=false \
+    "${IMAGE}" \
+    python "${SCRIPT_PATH}" \
+        --gt-json "${GT_JSON}" \
+        --model-name Qwen/Qwen2.5-VL-7B-Instruct \
+        --vts-config ./GoMatching/configs/GoMatching_PP_BOVText_vit.yaml \
+        --vts-model "${VTS_MODEL}" \
+        --video-dir "${VIDEO_DIR}" \
+        --output "${OUTPUT_JSON}" \
+        ${EXTRA_ARGS}
