@@ -937,9 +937,10 @@ def select_key_zoom(text_boxes_list, video, question, text_list=None, object_box
                 (int(0.6 * w), int(0.6 * h)),
                 (int(0.8 * w), int(0.8 * h)),
             ]
-            d_proposals = text_object_density_proposals(
-                text_boxes, object_boxes, h, w, d_win_sizes,
-                top_k=g_density_top_k, nms_thresh=g_density_nms)
+            # 只用滑窗密度 proposals，不混入 text cluster proposals
+            d_proposals = text_window_density_proposals(
+                text_boxes, h, w, d_win_sizes, top_k=g_density_top_k, nms_thresh=g_density_nms
+            )
             for sx, sy, pw, ph in d_proposals:
                 candidate = (sx, sy, pw, ph)
                 if candidate not in crop_candidates:
