@@ -7,10 +7,10 @@ from pathlib import Path
 
 import torch
 from torch.utils.data import Dataset, DataLoader
+from torch.optim import AdamW
 from transformers import (
     Qwen2_5_VLForConditionalGeneration,
     AutoProcessor,
-    AdamW,
     get_scheduler,
 )
 

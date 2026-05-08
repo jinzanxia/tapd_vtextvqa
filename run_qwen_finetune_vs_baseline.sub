@@ -72,44 +72,78 @@ ${CTR} exec --nv \
     --density-nms 0.5 \
     --no-object-detect
 
-# Evaluate baseline
+# Train fine-tuned model
 ${CTR} exec --nv \
   --pwd "${PWD}" \
   --env TOKENIZERS_PARALLELISM=false \
   "${IMAGE}" \
-  python "${SCRIPT_EVAL}" \
+  python "${SCRIPT_TRAIN}" \
     --gt-json "${GT_JSON}" \
+    --video-dir "${VIDEO_DIR}" \
     --model-name Qwen/Qwen2.5-VL-7B-Instruct \
     --vts-config ./GoMatching/configs/GoMatching_PP_BOVText_vit.yaml \
     --vts-model "${VTS_MODEL}" \
-    --video-dir "${VIDEO_DIR}" \
-    --output "${BASELINE_OUTPUT}" \
+    --output-dir "${OUTPUT_DIR}" \
+    --num-train-epochs 1 \
+    --train-batch-size 1 \
+    --gradient-accumulation-steps 1 \
+    --learning-rate 1e-5 \
+    --warmup-steps 0 \
+    --max-target-length 64 \
+    --max-train-samples 50 \
     --no-ocr-text \
     --no-focus-bonus \
     --layout-zoom center \
     --crop-mode hybrid \
     --density-top-k 2 \
-    --density-nms 0.5
+    --density-nms 0.5 \
+    --no-object-detect
 
-# Evaluate fine-tuned model
-${CTR} exec --nv \
-  --pwd "${PWD}" \
-  --env TOKENIZERS_PARALLELISM=false \
-  "${IMAGE}" \
-  python "${SCRIPT_EVAL}" \
-    --gt-json "${GT_JSON}" \
-    --model-name "${FINETUNED_MODEL}" \
-    --vts-config ./GoMatching/configs/GoMatching_PP_BOVText_vit.yaml \
-    --vts-model "${VTS_MODEL}" \
-    --video-dir "${VIDEO_DIR}" \
-    --output "${FINETUNE_OUTPUT}" \
-    --no-ocr-text \
-    --no-focus-bonus \
-    --layout-zoom center \
-    --crop-mode hybrid \
-    --density-top-k 2 \
-    --density-nms 0.5
+# Evaluate baseline and fine-tuned model in parallel
+(
+  ${CTR} exec --nv \
+    --pwd "${PWD}" \
+    --env TOKENIZERS_PARALLELISM=false \
+    "${IMAGE}" \
+    python "${SCRIPT_EVAL}" \
+      --gt-json "${GT_JSON}" \
+      --model-name Qwen/Qwen2.5-VL-7B-Instruct \
+      --vts-config ./GoMatching/configs/GoMatching_PP_BOVText_vit.yaml \
+      --vts-model "${VTS_MODEL}" \
+      --video-dir "${VIDEO_DIR}" \
+      --output "${BASELINE_OUTPUT}" \
+      --no-ocr-text \
+      --no-focus-bonus \
+      --layout-zoom center \
+      --crop-mode hybrid \
+      --density-top-k 2 \
+      --density-nms 0.5
+) &
+
+(
+  ${CTR} exec --nv \
+    --pwd "${PWD}" \
+    --env TOKENIZERS_PARALLELISM=false \
+    "${IMAGE}" \
+    python "${SCRIPT_EVAL}" \
+      --gt-json "${GT_JSON}" \
+      --model-name "${FINETUNED_MODEL}" \
+      --vts-config ./GoMatching/configs/GoMatching_PP_BOVText_vit.yaml \
+      --vts-model "${VTS_MODEL}" \
+      --video-dir "${VIDEO_DIR}" \
+      --output "${FINETUNE_OUTPUT}" \
+      --no-ocr-text \
+      --no-focus-bonus \
+      --layout-zoom center \
+      --crop-mode hybrid \
+      --density-top-k 2 \
+      --density-nms 0.5
+) &
+
+# Wait for both evaluations to complete
+wait
 
 echo "Baseline output: ${BASELINE_OUTPUT}"
 echo "Fine-tuned output: ${FINETUNE_OUTPUT}"
 echo "Finished baseline vs fine-tuned comparison."
+
