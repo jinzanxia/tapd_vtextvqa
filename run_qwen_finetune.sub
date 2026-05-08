@@ -42,25 +42,28 @@ ${CTR} exec --nv \
   --pwd "${PWD}" \
   --env TOKENIZERS_PARALLELISM=false \
   "${IMAGE}" \
-  python "${SCRIPT_PATH}" \
-    --gt-json "${GT_JSON}" \
-    --video-dir "${VIDEO_DIR}" \
-    --model-name Qwen/Qwen2.5-VL-7B-Instruct \
-    --vts-config ./GoMatching/configs/GoMatching_PP_BOVText_vit.yaml \
-    --vts-model "${VTS_MODEL}" \
-    --output-dir "${OUTPUT_DIR}" \
-    --num-train-epochs 1 \
-    --train-batch-size 1 \
-    --learning-rate 1e-5 \
-    --warmup-steps 0 \
-    --max-target-length 64 \
-    --max-train-samples 50 \
-    --no-ocr-text \
-    --no-focus-bonus \
-    --layout-zoom center \
-    --crop-mode hybrid \
-    --density-top-k 2 \
-    --density-nms 0.5 \
-    --no-object-detect
+  bash -c "
+    pip install flash-attn --no-build-isolation
+    python ${SCRIPT_PATH} \
+      --gt-json ${GT_JSON} \
+      --video-dir ${VIDEO_DIR} \
+      --model-name Qwen/Qwen2.5-VL-7B-Instruct \
+      --vts-config ./GoMatching/configs/GoMatching_PP_BOVText_vit.yaml \
+      --vts-model ${VTS_MODEL} \
+      --output-dir ${OUTPUT_DIR} \
+      --num-train-epochs 1 \
+      --train-batch-size 1 \
+      --learning-rate 1e-5 \
+      --warmup-steps 0 \
+      --max-target-length 64 \
+      --max-train-samples 50 \
+      --no-ocr-text \
+      --no-focus-bonus \
+      --layout-zoom center \
+      --crop-mode hybrid \
+      --density-top-k 2 \
+      --density-nms 0.5 \
+      --no-object-detect
+  "
 
 echo "Fine-tuning finished. Output dir: ${OUTPUT_DIR}"
