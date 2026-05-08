@@ -1,0 +1,22 @@
+FROM xiaojino/sfa:v1.2
+
+SHELL ["/bin/bash", "-c"]
+
+RUN apt-get update && apt-get install -y wget && rm -rf /var/lib/apt/lists/*
+
+RUN source /opt/conda/etc/profile.d/conda.sh && \
+    conda activate sfa && \
+    pip install -U pip setuptools wheel packaging ninja
+
+WORKDIR /tmp
+
+RUN wget https://github.com/Dao-AILab/flash-attention/releases/download/v2.8.3/flash_attn-2.8.3+cu12torch2.6cxx11abiFALSE-cp310-cp310-linux_x86_64.whl && \
+    source /opt/conda/etc/profile.d/conda.sh && \
+    conda activate sfa && \
+    pip install flash_attn-2.8.3+cu12torch2.6cxx11abiFALSE-cp310-cp310-linux_x86_64.whl
+
+RUN source /opt/conda/etc/profile.d/conda.sh && \
+    conda activate sfa && \
+    python -c "import flash_attn; print('flash-attn OK')"
+
+WORKDIR /workspace

@@ -11,7 +11,7 @@
 
 set -euo pipefail
 
-IMAGE="docker://xiaojino/sfa:v1.2"
+IMAGE="docker://xiaojino/sfa-fa2:v1.0"
 SCRIPT_PATH="$PWD/infer_codes/qwen_finetune.py"
 DATA_DIR="/mnt/fast/nobackup/scratch4weeks/nc324se/data/M4-ViteVQA"
 GT_JSON="${DATA_DIR}/Annotations/ViteVQA_0.0.2_t1s1val.json"
@@ -43,7 +43,6 @@ ${CTR} exec --nv \
   --env TOKENIZERS_PARALLELISM=false \
   "${IMAGE}" \
   bash -c "
-    pip install flash-attn --no-build-isolation
     python ${SCRIPT_PATH} \
       --gt-json ${GT_JSON} \
       --video-dir ${VIDEO_DIR} \
