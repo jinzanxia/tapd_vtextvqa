@@ -30,14 +30,38 @@ else
   exit 1
 fi
 
+# -----------------------------
+# 1. sanity check
+# -----------------------------
 ${CTR} exec --nv "${IMAGE}" bash -lc "
   test -f '${SCRIPT_PATH}' || { echo 'Missing script: ${SCRIPT_PATH}'; exit 1; }
   test -f '${GT_JSON}' || { echo 'Missing gt json: ${GT_JSON}'; exit 1; }
   test -d '${VIDEO_DIR}' || { echo 'Missing video dir: ${VIDEO_DIR}'; exit 1; }
   test -f '${VTS_MODEL}' || { echo 'Missing VTS model: ${VTS_MODEL}'; exit 1; }
-  python -c 'import torch, transformers, datasets' || { echo 'Missing Python dependencies in image'; exit 1; }
+  python -c 'import torch, transformers, datasets' || { echo 'Missing base Python deps'; exit 1; }
 "
 
+# -----------------------------
+# 2. install detectron2 (runtime)
+# -----------------------------
+echo "Installing detectron2 inside container..."
+
+${CTR} exec --nv "${IMAGE}" bash -lc "
+  pip install -U pip setuptools wheel ninja
+
+  # try prebuilt wheel first (fast)
+  pip install detectron2 -f \
+  https://dl.fbaipublicfiles.com/detectron2/wheels/cu124/torch2.6/index.html \
+  || {
+
+    echo 'Prebuilt wheel failed, falling back to source install...'
+    pip install 'git+https://github.com/facebookresearch/detectron2.git'
+  }
+"
+
+# -----------------------------
+# 3. training
+# -----------------------------
 ${CTR} exec --nv \
   --pwd "${PWD}" \
   --env TOKENIZERS_PARALLELISM=false \
