@@ -49,14 +49,8 @@ echo "Installing detectron2 inside container..."
 ${CTR} exec --nv "${IMAGE}" bash -lc "
   pip install -U pip setuptools wheel ninja
 
-  # try prebuilt wheel first (fast)
-  pip install detectron2 -f \
-  https://dl.fbaipublicfiles.com/detectron2/wheels/cu124/torch2.6/index.html \
-  || {
-
-    echo 'Prebuilt wheel failed, falling back to source install...'
-    pip install 'git+https://github.com/facebookresearch/detectron2.git'
-  }
+  pip install --no-build-isolation \
+  git+https://github.com/facebookresearch/detectron2.git
 "
 
 # -----------------------------
