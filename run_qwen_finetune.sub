@@ -11,7 +11,7 @@
 
 set -euo pipefail
 
-IMAGE="docker://xiaojino/sfa-fa2:v1.0"
+IMAGE="docker://xiaojino/sfa:v2.0"
 SCRIPT_PATH="$PWD/infer_codes/qwen_finetune.py"
 DATA_DIR="/mnt/fast/nobackup/scratch4weeks/nc324se/data/M4-ViteVQA"
 GT_JSON="${DATA_DIR}/Annotations/ViteVQA_0.0.2_t1s1val.json"
@@ -39,18 +39,6 @@ ${CTR} exec --nv "${IMAGE}" bash -lc "
   test -d '${VIDEO_DIR}' || { echo 'Missing video dir: ${VIDEO_DIR}'; exit 1; }
   test -f '${VTS_MODEL}' || { echo 'Missing VTS model: ${VTS_MODEL}'; exit 1; }
   python -c 'import torch, transformers, datasets' || { echo 'Missing base Python deps'; exit 1; }
-"
-
-# -----------------------------
-# 2. install detectron2 (runtime)
-# -----------------------------
-echo "Installing detectron2 inside container..."
-
-${CTR} exec --nv "${IMAGE}" bash -lc "
-  pip install -U pip setuptools wheel ninja
-
-  pip install --no-build-isolation \
-  git+https://github.com/facebookresearch/detectron2.git
 "
 
 # -----------------------------
