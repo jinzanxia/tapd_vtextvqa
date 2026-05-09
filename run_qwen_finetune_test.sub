@@ -26,12 +26,12 @@ OUTPUT_DIR="./checkpoints/qwen_finetune"
 mkdir -p ./logs "${OUTPUT_DIR}"
 
 if command -v apptainer >/dev/null 2>&1; then
-  CTR="apptainer"
+    CTR="apptainer"
 elif command -v singularity >/dev/null 2>&1; then
-  CTR="singularity"
+    CTR="singularity"
 else
-  echo "Neither apptainer nor singularity found."
-  exit 1
+    echo "Neither apptainer nor singularity found."
+    exit 1
 fi
 
 # =========================================================
@@ -39,100 +39,105 @@ fi
 # =========================================================
 ${CTR} exec --nv "${IMAGE}" bash -lc "
 
-  echo '===== PYTHON ====='
-  which python || true
+echo '===== PYTHON ====='
+which python || true
 
-  echo '===== CONDA PYTHON ====='
-  ls /opt/conda/envs/qwen/bin/python || true
+echo '===== CONDA PYTHON ====='
+ls /opt/conda/envs/qwen/bin/python || true
 
-  test -f '${SCRIPT_PATH}' || {
+test -f '${SCRIPT_PATH}' || {
     echo 'Missing script: ${SCRIPT_PATH}'
     exit 1
-  }
+}
 
-  test -f '${GT_JSON}' || {
+test -f '${GT_JSON}' || {
     echo 'Missing gt json: ${GT_JSON}'
     exit 1
-  }
+}
 
-  test -d '${VIDEO_DIR}' || {
+test -d '${VIDEO_DIR}' || {
     echo 'Missing video dir: ${VIDEO_DIR}'
     exit 1
-  }
+}
 
-  test -f '${VTS_MODEL}' || {
+test -f '${VTS_MODEL}' || {
     echo 'Missing VTS model: ${VTS_MODEL}'
     exit 1
-  }
+}
 
-  /opt/conda/envs/qwen/bin/python -c '
+/opt/conda/envs/qwen/bin/python - <<'PYCODE'
 import torch
 import transformers
 import datasets
 
-print(\"TORCH:\", torch.__version__)
-print(\"CUDA:\", torch.cuda.is_available())
-print(\"BASE DEPS OK\")
-'
+print('TORCH:', torch.__version__)
+print('CUDA:', torch.cuda.is_available())
+print('BASE DEPS OK')
+PYCODE
+
 "
 
 # =========================================================
 # training
 # =========================================================
 ${CTR} exec --nv \
-  --pwd "${PWD}" \
-  --env TOKENIZERS_PARALLELISM=false \
-  "${IMAGE}" \
-  bash -lc "
-    export PYTHONPATH=${PWD}/third_party/AdelaiDet:${PYTHONPATH}
+    --pwd "${PWD}" \
+    --env TOKENIZERS_PARALLELISM=false \
+    "${IMAGE}" \
+    bash -lc "
 
-    echo '===== PYTHONPATH ====='
-    echo ${PYTHONPATH}
+export PYTHONPATH=${PWD}/third_party/AdelaiDet:\${PYTHONPATH:-}
 
-    echo '===== INSTALL MISSING DEPS ====='
+echo '===== PYTHONPATH ====='
+echo \$PYTHONPATH
 
-    /opt/conda/envs/qwen/bin/pip install \
-      shapely \
-      pycocotools \
-      yacs \
-      fvcore \
-      iopath
+echo '===== INSTALL MISSING DEPS ====='
 
-    echo '===== CHECK PYTHON ENV ====='
+/opt/conda/envs/qwen/bin/pip install \
+    shapely \
+    pycocotools \
+    yacs \
+    fvcore \
+    iopath
 
-    /opt/conda/envs/qwen/bin/python -c '
+echo '===== CHECK PYTHON ENV ====='
+
+/opt/conda/envs/qwen/bin/python - <<'PYCODE'
 import torch
 import shapely
 import detectron2
+import adet
 
-print(\"TORCH:\", torch.__version__)
-print(\"CUDA:\", torch.cuda.is_available())
-print(\"SHAPELY OK\")
-print(\"DETECTRON2 OK\")
-'
+print('TORCH:', torch.__version__)
+print('CUDA:', torch.cuda.is_available())
+print('SHAPELY OK')
+print('DETECTRON2 OK')
+print('ADET OK')
+PYCODE
 
-    echo '===== START TRAINING ====='
+echo '===== START TRAINING ====='
 
-    /opt/conda/envs/qwen/bin/python ${SCRIPT_PATH} \
-      --gt-json ${GT_JSON} \
-      --video-dir ${VIDEO_DIR} \
-      --model-name Qwen/Qwen2.5-VL-7B-Instruct \
-      --vts-config ./GoMatching/configs/GoMatching_PP_BOVText_vit.yaml \
-      --vts-model ${VTS_MODEL} \
-      --output-dir ${OUTPUT_DIR} \
-      --num-train-epochs 1 \
-      --train-batch-size 1 \
-      --learning-rate 1e-5 \
-      --warmup-steps 0 \
-      --max-target-length 64 \
-      --max-train-samples 50 \
-      --no-ocr-text \
-      --no-focus-bonus \
-      --layout-zoom center \
-      --crop-mode hybrid \
-      --density-top-k 2 \
-      --density-nms 0.5 \
-      --no-object-detect
+/opt/conda/envs/qwen/bin/python ${SCRIPT_PATH} \
+    --gt-json ${GT_JSON} \
+    --video-dir ${VIDEO_DIR} \
+    --model-name Qwen/Qwen2.5-VL-7B-Instruct \
+    --vts-config ./GoMatching/configs/GoMatching_PP_BOVText_vit.yaml \
+    --vts-model ${VTS_MODEL} \
+    --output-dir ${OUTPUT_DIR} \
+    --num-train-epochs 1 \
+    --train-batch-size 1 \
+    --learning-rate 1e-5 \
+    --warmup-steps 0 \
+    --max-target-length 64 \
+    --max-train-samples 50 \
+    --no-ocr-text \
+    --no-focus-bonus \
+    --layout-zoom center \
+    --crop-mode hybrid \
+    --density-top-k 2 \
+    --density-nms 0.5 \
+    --no-object-detect
+
 "
 
 echo "Fine-tuning finished. Output dir: ${OUTPUT_DIR}"
