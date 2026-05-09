@@ -85,6 +85,30 @@ ${CTR} exec --nv \
   "${IMAGE}" \
   bash -lc "
 
+    echo '===== INSTALL MISSING DEPS ====='
+
+    /opt/conda/envs/qwen/bin/pip install \
+      shapely \
+      pycocotools \
+      yacs \
+      fvcore \
+      iopath
+
+    echo '===== CHECK PYTHON ENV ====='
+
+    /opt/conda/envs/qwen/bin/python -c '
+import torch
+import shapely
+import detectron2
+
+print(\"TORCH:\", torch.__version__)
+print(\"CUDA:\", torch.cuda.is_available())
+print(\"SHAPELY OK\")
+print(\"DETECTRON2 OK\")
+'
+
+    echo '===== START TRAINING ====='
+
     /opt/conda/envs/qwen/bin/python ${SCRIPT_PATH} \
       --gt-json ${GT_JSON} \
       --video-dir ${VIDEO_DIR} \
