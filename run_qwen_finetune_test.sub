@@ -65,11 +65,14 @@ ${CTR} exec --nv \
     "${IMAGE}" \
     bash -lc "
 
-#export PYTHONPATH=${PWD}/third_party/AdelaiDet:\${PYTHONPATH:-}
+python - <<'PYCODE' || pip install peft
+import peft
+print('PEFT OK:', peft.__version__)
+PYCODE
 
 echo '===== START TRAINING ====='
 
-/opt/conda/envs/qwen/bin/python -m torch.distributed.run \
+python -m torch.distributed.run \
     --standalone \
     --nproc_per_node=2 \
     ${SCRIPT_PATH} \

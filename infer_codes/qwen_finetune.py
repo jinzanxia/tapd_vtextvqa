@@ -198,18 +198,24 @@ class QwenDataCollator:
         self.max_target_length = max_target_length
 
     def __call__(self, features):
-        texts = []
-        answers = []
+        prompt_texts = []
+        full_texts = []
         image_inputs = []
         video_inputs = []
         fps = []
 
         for feature in features:
-            text = self.processor.apply_chat_template(
+            prompt_text = self.processor.apply_chat_template(
                 feature["conversation"], tokenize=False, add_generation_prompt=True
             )
-            texts.append(text)
-            answers.append(feature["answer"])
+            full_conversation = feature["conversation"] + [
+                {"role": "assistant", "content": [{"type": "text", "text": str(feature["answer"])}]},
+            ]
+            full_text = self.processor.apply_chat_template(
+                full_conversation, tokenize=False, add_generation_prompt=False
+            )
+            prompt_texts.append(prompt_text)
+            full_texts.append(full_text)
             if feature["image_inputs"] is not None:
                 image_inputs.append(feature["image_inputs"][0])
             if feature["video_inputs"] is not None:
@@ -223,7 +229,7 @@ class QwenDataCollator:
             video_inputs = None
 
         inputs = self.processor(
-            text=texts,
+            text=full_texts,
             images=image_inputs,
             videos=video_inputs,
             padding=True,
@@ -231,16 +237,30 @@ class QwenDataCollator:
             fps=fps if fps else None,
         )
 
-        label_encodings = self.tokenizer(
-            answers,
+        prompt_inputs = self.processor(
+            text=prompt_texts,
+            images=image_inputs,
+            videos=video_inputs,
             padding=True,
-            truncation=True,
-            max_length=self.max_target_length,
             return_tensors="pt",
+            fps=fps if fps else None,
         )
-        labels = label_encodings.input_ids
+
+        labels = inputs["input_ids"].clone()
         pad_token_id = self.tokenizer.pad_token_id or self.tokenizer.eos_token_id
         labels = labels.masked_fill(labels == pad_token_id, -100)
+        labels = labels.masked_fill(inputs["attention_mask"] == 0, -100)
+
+        padding_side = getattr(self.tokenizer, "padding_side", "right")
+        for i in range(labels.size(0)):
+            full_len = int(inputs["attention_mask"][i].sum().item())
+            prompt_len = int(prompt_inputs["attention_mask"][i].sum().item())
+            prompt_len = min(prompt_len, full_len)
+            if padding_side == "left":
+                start = labels.size(1) - full_len
+            else:
+                start = 0
+            labels[i, start : start + prompt_len] = -100
 
         inputs["labels"] = labels
         return inputs
