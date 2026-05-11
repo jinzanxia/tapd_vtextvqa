@@ -6,13 +6,22 @@ import logging
 from pathlib import Path
 
 import torch
+import torch.distributed as dist
+from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import Dataset, DataLoader
+from torch.utils.data.distributed import DistributedSampler
 from torch.optim import AdamW
 from transformers import (
     Qwen2_5_VLForConditionalGeneration,
     AutoProcessor,
     get_scheduler,
 )
+try:
+    from peft import LoraConfig, TaskType, get_peft_model
+except ImportError:
+    LoraConfig = None
+    TaskType = None
+    get_peft_model = None
 
 from qwen_vison_process import (
     process_vision_info,
@@ -24,6 +33,57 @@ from qwen_vison_process import (
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+def setup_distributed():
+    world_size = int(os.environ.get("WORLD_SIZE", "1"))
+    rank = int(os.environ.get("RANK", "0"))
+    local_rank = int(os.environ.get("LOCAL_RANK", "0"))
+    distributed = world_size > 1
+
+    if distributed:
+        if not torch.cuda.is_available():
+            raise RuntimeError("Distributed training requires CUDA in this script.")
+        torch.cuda.set_device(local_rank)
+        dist.init_process_group(backend="nccl")
+
+    device = torch.device(f"cuda:{local_rank}" if torch.cuda.is_available() else "cpu")
+    return distributed, rank, local_rank, world_size, device
+
+
+def is_main_process(rank):
+    return rank == 0
+
+
+def parse_lora_targets(target_modules):
+    return [module.strip() for module in target_modules.split(",") if module.strip()]
+
+
+def apply_lora(model, args, rank):
+    if not args.use_lora:
+        return model
+    if get_peft_model is None:
+        raise ImportError("LoRA training requires the `peft` package. Please install peft in the training environment.")
+
+    if hasattr(model, "config"):
+        model.config.use_cache = False
+    if args.gradient_checkpointing and hasattr(model, "gradient_checkpointing_enable"):
+        model.gradient_checkpointing_enable()
+    if args.gradient_checkpointing and hasattr(model, "enable_input_require_grads"):
+        model.enable_input_require_grads()
+
+    lora_config = LoraConfig(
+        r=args.lora_r,
+        lora_alpha=args.lora_alpha,
+        lora_dropout=args.lora_dropout,
+        bias="none",
+        task_type=TaskType.CAUSAL_LM,
+        target_modules=parse_lora_targets(args.lora_target_modules),
+    )
+    model = get_peft_model(model, lora_config)
+    if is_main_process(rank):
+        model.print_trainable_parameters()
+    return model
 
 
 class VQAFineTuneDataset(Dataset):
@@ -204,6 +264,19 @@ def parse_args():
     parser.add_argument("--max-target-length", type=int, default=64, help="Maximum target answer length")
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
     parser.add_argument("--fp16", action="store_true", help="Use FP16 training")
+    parser.add_argument("--use-lora", action="store_true", default=True, dest="use_lora", help="Enable LoRA adapter fine-tuning")
+    parser.add_argument("--no-lora", action="store_false", dest="use_lora", help="Disable LoRA and fine-tune all model parameters")
+    parser.add_argument("--lora-r", type=int, default=16, help="LoRA rank")
+    parser.add_argument("--lora-alpha", type=int, default=32, help="LoRA alpha")
+    parser.add_argument("--lora-dropout", type=float, default=0.05, help="LoRA dropout")
+    parser.add_argument(
+        "--lora-target-modules",
+        type=str,
+        default="q_proj,k_proj,v_proj,o_proj,gate_proj,up_proj,down_proj",
+        help="Comma-separated module names to apply LoRA to",
+    )
+    parser.add_argument("--gradient-checkpointing", action="store_true", default=True, help="Enable gradient checkpointing")
+    parser.add_argument("--no-gradient-checkpointing", action="store_false", dest="gradient_checkpointing", help="Disable gradient checkpointing")
     parser.add_argument("--use-ocr-text", action="store_true", default=False, dest="use_ocr_text", help="Enable OCR text injection")
     parser.add_argument("--no-ocr-text", action="store_false", dest="use_ocr_text", help="Disable OCR text injection")
     parser.add_argument("--conditional-ocr", action="store_true", help="Inject OCR only for text/number questions")
@@ -240,10 +313,11 @@ def set_seed(seed: int):
 
 def main():
     args = parse_args()
+    distributed, rank, local_rank, world_size, device = setup_distributed()
     set_seed(args.seed)
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    logger.info(f"Using device: {device}")
+    if is_main_process(rank):
+        logger.info(f"Using device: {device} | distributed={distributed} | world_size={world_size}")
 
     set_key_conf(
         w_size=0.6,
@@ -270,13 +344,17 @@ def main():
 
     model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
         args.model_name,
-        device_map={"": str(device)},
         torch_dtype=torch.bfloat16 if device.type == "cuda" else None,
         attn_implementation="sdpa", #"flash_attention_2",
     )
+    model.to(device)
+    model = apply_lora(model, args, rank)
     processor = AutoProcessor.from_pretrained(args.model_name)
 
     init_ocrmodel(cfg_path=args.vts_config, model_path=args.vts_model, device=device, model=model, processor=processor)
+
+    if distributed:
+        model = DDP(model, device_ids=[local_rank], output_device=local_rank, find_unused_parameters=False)
 
     dataset = VQAFineTuneDataset(
         args.gt_json,
@@ -288,19 +366,22 @@ def main():
         ocr_top_k=args.ocr_top_k,
         ocr_min_freq=args.ocr_min_freq,
     )
-    logger.info(f"Loaded {len(dataset)} training examples")
+    if is_main_process(rank):
+        logger.info(f"Loaded {len(dataset)} training examples")
 
     collator = QwenDataCollator(processor=processor, tokenizer=processor.tokenizer, max_target_length=args.max_target_length)
+    train_sampler = DistributedSampler(dataset, num_replicas=world_size, rank=rank, shuffle=True) if distributed else None
 
     train_dataloader = DataLoader(
         dataset,
         batch_size=args.train_batch_size,
-        shuffle=True,
+        shuffle=train_sampler is None,
+        sampler=train_sampler,
         collate_fn=collator,
         num_workers=args.num_workers,
     )
 
-    optimizer = AdamW(model.parameters(), lr=args.learning_rate)
+    optimizer = AdamW((p for p in model.parameters() if p.requires_grad), lr=args.learning_rate)
     num_update_steps_per_epoch = max(1, len(train_dataloader) // args.gradient_accumulation_steps)
     num_training_steps = args.num_train_epochs * num_update_steps_per_epoch
     lr_scheduler = get_scheduler(
@@ -318,6 +399,8 @@ def main():
 
     global_step = 0
     for epoch in range(args.num_train_epochs):
+        if train_sampler is not None:
+            train_sampler.set_epoch(epoch)
         running_loss = 0.0
         for step, batch in enumerate(train_dataloader):
             batch = {k: v.to(device) for k, v in batch.items() if isinstance(v, torch.Tensor)}
@@ -342,20 +425,34 @@ def main():
                 global_step += 1
 
             running_loss += loss.item() * args.gradient_accumulation_steps
-            if (step + 1) % 10 == 0:
+            if is_main_process(rank) and (step + 1) % 10 == 0:
                 logger.info(
                     f"Epoch {epoch + 1}/{args.num_train_epochs} | step {step + 1}/{len(train_dataloader)} | loss {running_loss / (step + 1):.4f}"
                 )
 
-        checkpoint_path = output_dir / f"checkpoint-epoch-{epoch + 1}"
-        model.save_pretrained(checkpoint_path)
-        processor.save_pretrained(checkpoint_path)
-        logger.info(f"Saved checkpoint to {checkpoint_path}")
+        if distributed:
+            dist.barrier()
+
+        if is_main_process(rank):
+            checkpoint_path = output_dir / f"checkpoint-epoch-{epoch + 1}"
+            model_to_save = model.module if distributed else model
+            model_to_save.save_pretrained(checkpoint_path)
+            processor.save_pretrained(checkpoint_path)
+            logger.info(f"Saved checkpoint to {checkpoint_path}")
+
+        if distributed:
+            dist.barrier()
 
     final_path = output_dir / "final"
-    model.save_pretrained(final_path)
-    processor.save_pretrained(final_path)
-    logger.info(f"Training completed. Final model saved to {final_path}")
+    if is_main_process(rank):
+        model_to_save = model.module if distributed else model
+        model_to_save.save_pretrained(final_path)
+        processor.save_pretrained(final_path)
+        logger.info(f"Training completed. Final model saved to {final_path}")
+
+    if distributed:
+        dist.barrier()
+        dist.destroy_process_group()
 
 
 if __name__ == "__main__":
