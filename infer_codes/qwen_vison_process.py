@@ -354,8 +354,17 @@ def ocr_post_correct(vlm_answer, ocr_texts, max_edit_dist=2):
     return vlm_answer
 
 
+def _canonical_torch_device(device):
+    device = torch.device(device)
+    if device.type == "cuda" and device.index is None:
+        index = torch.cuda.current_device() if torch.cuda.is_available() else 0
+        return torch.device("cuda", index)
+    return device
+
+
 def setup_cfg(cfg_path, model_path, device):
     global CTLABELS, voc_size
+    device = _canonical_torch_device(device)
     cfg = get_cfg()
     add_deepsolo_cfg(cfg)
     add_gom_config(cfg)
@@ -363,8 +372,7 @@ def setup_cfg(cfg_path, model_path, device):
     cfg.MODEL.WEIGHTS = model_path
     cfg.MODEL.ASSO_HEAD.ASSO_THRESH_TEST = cfg.MODEL.TRANSFORMER.INFERENCE_TH_TEST
     cfg.VIDEO_TEST.MIN_TRACK_LEN = 1
-    #cfg.MODEL.DEVICE = str(device)
-    cfg.MODEL.DEVICE = "cuda"
+    cfg.MODEL.DEVICE = str(device)
     
     cfg.freeze()
     with open(cfg.MODEL.TRANSFORMER.CUSTOM_DICT, 'rb') as fp:
@@ -388,9 +396,9 @@ def ctc_decode_recognition(rec):
 
 def init_ocrmodel(cfg_path, model_path, device, model, processor):
     global video_text_spotter, tracker_visualizer, vlm_model, vlm_processor
+    det_device = _canonical_torch_device(device)
     cfg = setup_cfg(cfg_path, model_path, device)
     video_text_spotter = GoMBatchPredictor(cfg)
-    det_device = torch.device(device)
     for name, param in video_text_spotter.model.named_parameters():
         assert param.device == det_device, f"param {name} on {param.device}"
     for name, buf in video_text_spotter.model.named_buffers():
