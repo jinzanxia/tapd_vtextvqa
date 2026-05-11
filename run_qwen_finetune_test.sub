@@ -37,13 +37,23 @@ fi
 # =========================================================
 # sanity check
 # =========================================================
-${CTR} exec --nv "${IMAGE}" bash -lc "
+${CTR} exec --nv \
+    --bind "${PWD}:${PWD}" \
+    "${IMAGE}" \
+    bash -lc "
 
 echo '===== PYTHON ====='
 which python || true
 
 echo '===== CONDA PYTHON ====='
 ls /opt/conda/envs/qwen/bin/python || true
+
+echo '===== CHECK PROJECT ====='
+pwd
+ls
+ls ${PWD} || true
+ls ${PWD}/third_party || true
+ls ${PWD}/third_party/AdelaiDet || true
 
 test -f '${SCRIPT_PATH}' || {
     echo 'Missing script: ${SCRIPT_PATH}'
@@ -81,6 +91,7 @@ PYCODE
 # training
 # =========================================================
 ${CTR} exec --nv \
+    --bind "${PWD}:${PWD}" \
     --pwd "${PWD}" \
     --env TOKENIZERS_PARALLELISM=false \
     "${IMAGE}" \
@@ -90,6 +101,12 @@ export PYTHONPATH=${PWD}/third_party/AdelaiDet:\${PYTHONPATH:-}
 
 echo '===== PYTHONPATH ====='
 echo \$PYTHONPATH
+
+echo '===== CHECK PROJECT ====='
+pwd
+ls
+ls third_party || true
+ls third_party/AdelaiDet || true
 
 echo '===== INSTALL MISSING DEPS ====='
 
