@@ -106,7 +106,7 @@ if __name__ == "__main__":
         model_path,
         device_map=device,
         torch_dtype=torch.bfloat16,
-        attn_implementation="flash_attention_2",
+        attn_implementation="sdpa", #"flash_attention_2",
         # resume_download=True,
     )
     processor = AutoProcessor.from_pretrained(model_path)
