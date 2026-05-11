@@ -197,6 +197,7 @@ def parse_args():
     parser.add_argument("--max-train-samples", type=int, default=None, help="Maximum number of training samples")
     parser.add_argument("--num-train-epochs", type=int, default=1, help="Number of training epochs")
     parser.add_argument("--train-batch-size", type=int, default=1, help="Per-device batch size")
+    parser.add_argument("--num-workers", type=int, default=0, help="DataLoader worker processes. Keep 0 when CUDA OCR/cropping is enabled.")
     parser.add_argument("--gradient-accumulation-steps", type=int, default=1, help="Gradient accumulation steps")
     parser.add_argument("--learning-rate", type=float, default=1e-5, help="Learning rate")
     parser.add_argument("--warmup-steps", type=int, default=0, help="Warmup steps")
@@ -296,7 +297,7 @@ def main():
         batch_size=args.train_batch_size,
         shuffle=True,
         collate_fn=collator,
-        num_workers=2,
+        num_workers=args.num_workers,
     )
 
     optimizer = AdamW(model.parameters(), lr=args.learning_rate)
