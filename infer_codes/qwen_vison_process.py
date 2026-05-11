@@ -363,7 +363,7 @@ def setup_cfg(cfg_path, model_path, device):
     cfg.MODEL.WEIGHTS = model_path
     cfg.MODEL.ASSO_HEAD.ASSO_THRESH_TEST = cfg.MODEL.TRANSFORMER.INFERENCE_TH_TEST
     cfg.VIDEO_TEST.MIN_TRACK_LEN = 1
-    cfg.MODEL.DEVICE = device
+    cfg.MODEL.DEVICE = str(device)
     cfg.freeze()
     with open(cfg.MODEL.TRANSFORMER.CUSTOM_DICT, 'rb') as fp:
         CTLABELS = pickle.load(fp)
