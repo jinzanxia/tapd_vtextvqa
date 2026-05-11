@@ -271,7 +271,7 @@ def main():
         args.model_name,
         device_map={"": str(device)},
         torch_dtype=torch.bfloat16 if device.type == "cuda" else None,
-        attn_implementation="sdpa","flash_attention_2",
+        attn_implementation="sdpa", #"flash_attention_2",
     )
     processor = AutoProcessor.from_pretrained(args.model_name)
 
