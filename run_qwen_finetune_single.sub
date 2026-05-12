@@ -1,0 +1,103 @@
+#!/bin/bash
+#SBATCH --job-name=qwen_finetune_single
+#SBATCH --partition=a100
+#SBATCH --gpus=1
+#SBATCH --nodes=1
+#SBATCH --ntasks-per-node=1
+#SBATCH --mem=80G
+#SBATCH --time=72:00:00
+#SBATCH -o ./logs/qwen_finetune_single.%N.%j.out
+#SBATCH -e ./logs/qwen_finetune_single.%N.%j.err
+
+set -euo pipefail
+
+IMAGE="docker://xiaojino/sfa:v1.2"
+
+SCRIPT_PATH="$PWD/infer_codes/qwen_finetune.py"
+
+DATA_DIR="/mnt/fast/nobackup/scratch4weeks/nc324se/data/M4-ViteVQA"
+GT_JSON="${DATA_DIR}/Annotations/ViteVQA_0.0.2_t1s1val.json"
+VIDEO_DIR="${DATA_DIR}/video"
+
+VTS_MODEL="${DATA_DIR}/GoMatching_pp_vitaeb_bovtext.pth"
+
+OUTPUT_DIR="./checkpoints/qwen2_5_vl_3b_lora_single"
+
+mkdir -p ./logs "${OUTPUT_DIR}"
+
+if command -v apptainer >/dev/null 2>&1; then
+    CTR="apptainer"
+elif command -v singularity >/dev/null 2>&1; then
+    CTR="singularity"
+else
+    echo "Neither apptainer nor singularity found."
+    exit 1
+fi
+
+test -f "${SCRIPT_PATH}" || {
+    echo "Missing script: ${SCRIPT_PATH}"
+    exit 1
+}
+
+test -f "${GT_JSON}" || {
+    echo "Missing gt json: ${GT_JSON}"
+    exit 1
+}
+
+test -d "${VIDEO_DIR}" || {
+    echo "Missing video dir: ${VIDEO_DIR}"
+    exit 1
+}
+
+test -f "${VTS_MODEL}" || {
+    echo "Missing VTS model: ${VTS_MODEL}"
+    exit 1
+}
+
+# =========================================================
+# training
+# =========================================================
+${CTR} exec --nv \
+    --bind "${PWD}:${PWD}" \
+    --pwd "${PWD}" \
+    --env TOKENIZERS_PARALLELISM=false \
+    "${IMAGE}" \
+    bash -lc "
+
+python - <<'PYCODE' || pip install peft
+import peft
+print('PEFT OK:', peft.__version__)
+PYCODE
+
+echo '===== START SINGLE-GPU TRAINING ====='
+
+python ${SCRIPT_PATH} \
+    --gt-json ${GT_JSON} \
+    --video-dir ${VIDEO_DIR} \
+    --model-name Qwen/Qwen2.5-VL-3B-Instruct \
+    --vts-config ./GoMatching/configs/GoMatching_PP_BOVText_vit.yaml \
+    --vts-model ${VTS_MODEL} \
+    --output-dir ${OUTPUT_DIR} \
+    --num-train-epochs 1 \
+    --train-batch-size 1 \
+    --learning-rate 2e-4 \
+    --warmup-steps 0 \
+    --max-target-length 64 \
+    --use-lora \
+    --lora-r 16 \
+    --lora-alpha 32 \
+    --lora-dropout 0.05 \
+    --lora-target-modules q_proj,k_proj,v_proj,o_proj,gate_proj,up_proj,down_proj \
+    --gradient-checkpointing \
+    --max-train-samples 50 \
+    --no-ocr-text \
+    --no-focus-bonus \
+    --layout-zoom center \
+    --crop-mode hybrid \
+    --density-top-k 2 \
+    --density-nms 0.5 \
+    --no-object-detect
+
+"
+
+echo "Fine-tuning finished. Output dir: ${OUTPUT_DIR}"
