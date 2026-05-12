@@ -1,5 +1,9 @@
 import torch
 from transformers import Qwen2_5_VLForConditionalGeneration, AutoProcessor
+try:
+    from peft import PeftModel
+except ImportError:
+    PeftModel = None
 import json
 import os
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
@@ -20,6 +24,7 @@ def get_parser():
     parser = argparse.ArgumentParser(description="builtin configs")
     parser.add_argument("--gt-json", help="gt json file path",)
     parser.add_argument("--model-name", help="video-llm path",)
+    parser.add_argument("--adapter-path", default=None, help="LoRA adapter path")
     parser.add_argument("--vts-config", help="VTS model config file path")
     parser.add_argument("--vts-model", help="VTS model path")
     parser.add_argument("--video-dir", help="input video dir path")
@@ -109,7 +114,16 @@ if __name__ == "__main__":
         attn_implementation="sdpa", #"flash_attention_2",
         # resume_download=True,
     )
-    processor = AutoProcessor.from_pretrained(model_path)
+    if args.adapter_path:
+        if PeftModel is None:
+            raise ImportError("Loading a LoRA adapter requires the `peft` package. Please install peft.")
+        model = PeftModel.from_pretrained(model, args.adapter_path)
+        model.eval()
+    processor_path = args.adapter_path if args.adapter_path else model_path
+    try:
+        processor = AutoProcessor.from_pretrained(processor_path)
+    except Exception:
+        processor = AutoProcessor.from_pretrained(model_path)
 
 
     init_ocrmodel(cfg_path=args.vts_config, model_path=args.vts_model, device=device, model=model, processor=processor)
