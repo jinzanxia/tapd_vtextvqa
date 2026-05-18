@@ -1,0 +1,90 @@
+#!/bin/bash
+#SBATCH --job-name=qwen_infer_3b_7b_nofinetune
+#SBATCH --partition=a100
+#SBATCH --gpus=1
+#SBATCH --nodes=1
+#SBATCH --ntasks-per-node=1
+#SBATCH --mem=80G
+#SBATCH --time=24:00:00
+#SBATCH -o ./logs/qwen_infer_3b_7b_nofinetune.%N.%j.out
+#SBATCH -e ./logs/qwen_infer_3b_7b_nofinetune.%N.%j.err
+
+set -euo pipefail
+
+IMAGE="docker://xiaojino/sfa:v1.2"
+SCRIPT_PATH="$PWD/infer_codes/qwen.py"
+
+DATA_DIR="/mnt/fast/nobackup/scratch4weeks/nc324se/data/M4-ViteVQA"
+GT_JSON="${DATA_DIR}/Annotations/ViteVQA_0.0.2_t1s1val.json"
+VIDEO_DIR="${DATA_DIR}/video"
+VTS_MODEL="${DATA_DIR}/GoMatching_pp_vitaeb_bovtext.pth"
+
+OUTPUT_DIR="./results"
+mkdir -p ./logs "${OUTPUT_DIR}"
+
+if command -v apptainer >/dev/null 2>&1; then
+    CTR="apptainer"
+elif command -v singularity >/dev/null 2>&1; then
+    CTR="singularity"
+else
+    echo "Neither apptainer nor singularity found."
+    exit 1
+fi
+
+for path in "${SCRIPT_PATH}" "${GT_JSON}" "${VTS_MODEL}"; do
+    test -f "${path}" || { echo "Missing file: ${path}"; exit 1; }
+done
+
+test -d "${VIDEO_DIR}" || { echo "Missing video dir: ${VIDEO_DIR}"; exit 1; }
+
+# =========================================================
+# direct inference without fine-tuning
+# =========================================================
+${CTR} exec --nv \
+    --bind "${PWD}:${PWD}" \
+    --pwd "${PWD}" \
+    --env TOKENIZERS_PARALLELISM=false \
+    "${IMAGE}" \
+    bash -lc "
+
+set -euo pipefail
+
+SCRIPT_PATH='${SCRIPT_PATH}'
+GT_JSON='${GT_JSON}'
+VIDEO_DIR='${VIDEO_DIR}'
+VTS_MODEL='${VTS_MODEL}'
+OUTPUT_DIR='${OUTPUT_DIR}'
+
+run_inference() {
+    local model_name="$1"
+    local output_json="$2"
+    local layout_zoom="$3"
+    local crop_mode="$4"
+    local density_top_k="$5"
+
+    echo '===== START INFERENCE:' "${model_name}" 'mode=' "${crop_mode}" 'layout_zoom=' "${layout_zoom}" 'density_top_k=' "${density_top_k}" '====='
+    python "${SCRIPT_PATH}" \
+        --gt-json "${GT_JSON}" \
+        --video-dir "${VIDEO_DIR}" \
+        --model-name "${model_name}" \
+        --vts-config ./GoMatching/configs/GoMatching_PP_BOVText_vit.yaml \
+        --vts-model "${VTS_MODEL}" \
+        --output "${output_json}" \
+        --no-ocr-text \
+        --no-focus-bonus \
+        --layout-zoom "${layout_zoom}" \
+        --crop-mode "${crop_mode}" \
+        --density-top-k "${density_top_k}" \
+        --density-nms 0.5 \
+        --no-object-detect
+    echo '===== FINISHED:' "${output_json}" '====='
+}
+
+run_inference 'Qwen/Qwen2.5-VL-3B-Instruct' '${OUTPUT_DIR}/qwen2_5_vl_3b_fixed_4corners_val.json' 'off' 'fixed' 0
+run_inference 'Qwen/Qwen2.5-VL-3B-Instruct' '${OUTPUT_DIR}/qwen2_5_vl_3b_hybrid_center_density2_val.json' 'center' 'hybrid' 2
+run_inference 'Qwen/Qwen2.5-VL-7B-Instruct' '${OUTPUT_DIR}/qwen2_5_vl_7b_fixed_4corners_val.json' 'off' 'fixed' 0
+run_inference 'Qwen/Qwen2.5-VL-7B-Instruct' '${OUTPUT_DIR}/qwen2_5_vl_7b_hybrid_center_density2_val.json' 'center' 'hybrid' 2
+
+"
+
+echo "All inference runs finished. Results saved under: ${OUTPUT_DIR}"
