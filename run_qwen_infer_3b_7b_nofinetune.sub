@@ -55,35 +55,77 @@ VIDEO_DIR='${VIDEO_DIR}'
 VTS_MODEL='${VTS_MODEL}'
 OUTPUT_DIR='${OUTPUT_DIR}'
 
-run_inference() {
-    local model_name="$1"
-    local output_json="$2"
-    local layout_zoom="$3"
-    local crop_mode="$4"
-    local density_top_k="$5"
+echo '===== START INFERENCE: Qwen/Qwen2.5-VL-3B-Instruct mode=fixed layout_zoom=off density_top_k=0 ====='
+python "${SCRIPT_PATH}" \
+    --gt-json "${GT_JSON}" \
+    --video-dir "${VIDEO_DIR}" \
+    --model-name 'Qwen/Qwen2.5-VL-3B-Instruct' \
+    --vts-config ./GoMatching/configs/GoMatching_PP_BOVText_vit.yaml \
+    --vts-model "${VTS_MODEL}" \
+    --output "${OUTPUT_DIR}/qwen2_5_vl_3b_fixed_4corners_val.json" \
+    --no-ocr-text \
+    --no-focus-bonus \
+    --layout-zoom off \
+    --crop-mode fixed \
+    --density-top-k 0 \
+    --density-nms 0.5 \
+    --no-object-detect
 
-    echo '===== START INFERENCE:' "${model_name}" 'mode=' "${crop_mode}" 'layout_zoom=' "${layout_zoom}" 'density_top_k=' "${density_top_k}" '====='
-    python "${SCRIPT_PATH}" \
-        --gt-json "${GT_JSON}" \
-        --video-dir "${VIDEO_DIR}" \
-        --model-name "${model_name}" \
-        --vts-config ./GoMatching/configs/GoMatching_PP_BOVText_vit.yaml \
-        --vts-model "${VTS_MODEL}" \
-        --output "${output_json}" \
-        --no-ocr-text \
-        --no-focus-bonus \
-        --layout-zoom "${layout_zoom}" \
-        --crop-mode "${crop_mode}" \
-        --density-top-k "${density_top_k}" \
-        --density-nms 0.5 \
-        --no-object-detect
-    echo '===== FINISHED:' "${output_json}" '====='
-}
+echo '===== FINISHED: ${OUTPUT_DIR}/qwen2_5_vl_3b_fixed_4corners_val.json ====='
 
-run_inference 'Qwen/Qwen2.5-VL-3B-Instruct' '${OUTPUT_DIR}/qwen2_5_vl_3b_fixed_4corners_val.json' 'off' 'fixed' 0
-run_inference 'Qwen/Qwen2.5-VL-3B-Instruct' '${OUTPUT_DIR}/qwen2_5_vl_3b_hybrid_center_density2_val.json' 'center' 'hybrid' 2
-run_inference 'Qwen/Qwen2.5-VL-7B-Instruct' '${OUTPUT_DIR}/qwen2_5_vl_7b_fixed_4corners_val.json' 'off' 'fixed' 0
-run_inference 'Qwen/Qwen2.5-VL-7B-Instruct' '${OUTPUT_DIR}/qwen2_5_vl_7b_hybrid_center_density2_val.json' 'center' 'hybrid' 2
+echo '===== START INFERENCE: Qwen/Qwen2.5-VL-3B-Instruct mode=hybrid layout_zoom=center density_top_k=2 ====='
+python "${SCRIPT_PATH}" \
+    --gt-json "${GT_JSON}" \
+    --video-dir "${VIDEO_DIR}" \
+    --model-name 'Qwen/Qwen2.5-VL-3B-Instruct' \
+    --vts-config ./GoMatching/configs/GoMatching_PP_BOVText_vit.yaml \
+    --vts-model "${VTS_MODEL}" \
+    --output "${OUTPUT_DIR}/qwen2_5_vl_3b_hybrid_center_density2_val.json" \
+    --no-ocr-text \
+    --no-focus-bonus \
+    --layout-zoom center \
+    --crop-mode hybrid \
+    --density-top-k 2 \
+    --density-nms 0.5 \
+    --no-object-detect
+
+echo '===== FINISHED: ${OUTPUT_DIR}/qwen2_5_vl_3b_hybrid_center_density2_val.json ====='
+
+echo '===== START INFERENCE: Qwen/Qwen2.5-VL-7B-Instruct mode=fixed layout_zoom=off density_top_k=0 ====='
+python "${SCRIPT_PATH}" \
+    --gt-json "${GT_JSON}" \
+    --video-dir "${VIDEO_DIR}" \
+    --model-name 'Qwen/Qwen2.5-VL-7B-Instruct' \
+    --vts-config ./GoMatching/configs/GoMatching_PP_BOVText_vit.yaml \
+    --vts-model "${VTS_MODEL}" \
+    --output "${OUTPUT_DIR}/qwen2_5_vl_7b_fixed_4corners_val.json" \
+    --no-ocr-text \
+    --no-focus-bonus \
+    --layout-zoom off \
+    --crop-mode fixed \
+    --density-top-k 0 \
+    --density-nms 0.5 \
+    --no-object-detect
+
+echo '===== FINISHED: ${OUTPUT_DIR}/qwen2_5_vl_7b_fixed_4corners_val.json ====='
+
+echo '===== START INFERENCE: Qwen/Qwen2.5-VL-7B-Instruct mode=hybrid layout_zoom=center density_top_k=2 ====='
+python "${SCRIPT_PATH}" \
+    --gt-json "${GT_JSON}" \
+    --video-dir "${VIDEO_DIR}" \
+    --model-name 'Qwen/Qwen2.5-VL-7B-Instruct' \
+    --vts-config ./GoMatching/configs/GoMatching_PP_BOVText_vit.yaml \
+    --vts-model "${VTS_MODEL}" \
+    --output "${OUTPUT_DIR}/qwen2_5_vl_7b_hybrid_center_density2_val.json" \
+    --no-ocr-text \
+    --no-focus-bonus \
+    --layout-zoom center \
+    --crop-mode hybrid \
+    --density-top-k 2 \
+    --density-nms 0.5 \
+    --no-object-detect
+
+echo '===== FINISHED: ${OUTPUT_DIR}/qwen2_5_vl_7b_hybrid_center_density2_val.json ====='
 
 "
 
