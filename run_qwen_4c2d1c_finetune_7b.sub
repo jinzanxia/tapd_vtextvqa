@@ -6,8 +6,8 @@
 #SBATCH --ntasks-per-node=1
 #SBATCH --mem=80G
 #SBATCH --time=72:00:00
-#SBATCH -o ./logs/qwen_finetune_7b.%N.%j.out
-#SBATCH -e ./logs/qwen_finetune_7b.%N.%j.err
+#SBATCH -o ./logs/qwen_finetune_7b_421.%N.%j.out
+#SBATCH -e ./logs/qwen_finetune_7b_421.%N.%j.err
 
 set -euo pipefail
 
@@ -20,7 +20,7 @@ GT_JSON="${DATA_DIR}/Annotations/ViteVQA_0.0.2_t1s1val.json"
 VIDEO_DIR="${DATA_DIR}/video"
 VTS_MODEL="${DATA_DIR}/GoMatching_pp_vitaeb_bovtext.pth"
 OUTPUT_DIR="./checkpoints/qwen2_5_vl_7b_lora_baseline"
-OUTPUT_JSON="./results/qwen2_5_vl_7b_lora_val_4corners.json"
+OUTPUT_JSON="./results/qwen2_5_vl_7b_lora_val_4corners_2de_1center.json"
 
 mkdir -p ./logs ./results "${OUTPUT_DIR}"
 
@@ -78,8 +78,9 @@ python -m torch.distributed.run \
     --gradient-checkpointing \
     --no-ocr-text \
     --no-focus-bonus \
-    --layout-zoom off \
-    --crop-mode fixed \
+    --layout-zoom center \
+    --crop-mode hybrid \
+    --density-top-k 2 \
     --density-nms 0.5 \
     --no-object-detect
 
@@ -99,9 +100,9 @@ python ${EVAL_SCRIPT_PATH} \
     --output ${OUTPUT_JSON} \
     --no-ocr-text \
     --no-focus-bonus \
-    --layout-zoom off \
-    --crop-mode fixed \
-    --density-top-k 0 \
+    --layout-zoom center \
+    --crop-mode hybrid \
+    --density-top-k 2 \
     --density-nms 0.5 \
     --no-object-detect
 
