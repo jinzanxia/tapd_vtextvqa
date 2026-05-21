@@ -48,6 +48,11 @@ ${CTR} exec --nv \
     --env TOKENIZERS_PARALLELISM=false \
     "${IMAGE}" \
     bash -lc "
+python - <<'PYCODE' || pip install peft
+import peft
+print('PEFT OK:', peft.__version__)
+PYCODE
+
 
 python ${SCRIPT_PATH} \
     --gt-json ${GT_JSON} \
