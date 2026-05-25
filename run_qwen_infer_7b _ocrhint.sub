@@ -1,0 +1,73 @@
+#!/bin/bash
+#SBATCH --job-name=qwen_infer_7b
+#SBATCH --partition=a100
+#SBATCH --gpus=1
+#SBATCH --nodes=1
+#SBATCH --ntasks-per-node=1
+#SBATCH --mem=80G
+#SBATCH --time=24:00:00
+#SBATCH -o ./logs/qwen_infer_7b.%N.%j.out
+#SBATCH -e ./logs/qwen_infer_7b.%N.%j.err
+
+set -euo pipefail
+
+IMAGE="docker://xiaojino/sfa:v1.2"
+SCRIPT_PATH="$PWD/infer_codes/qwen.py"
+
+DATA_DIR="/mnt/fast/nobackup/scratch4weeks/nc324se/data/M4-ViteVQA"
+GT_JSON="${DATA_DIR}/Annotations/ViteVQA_0.0.2_t1s1val.json"
+VIDEO_DIR="${DATA_DIR}/video"
+VTS_MODEL="${DATA_DIR}/GoMatching_pp_vitaeb_bovtext.pth"
+
+MODEL_NAME="Qwen/Qwen2.5-VL-7B-Instruct"
+OUTPUT_JSON="./results/qwen2_5_vl_7b_infer_val.json"
+
+mkdir -p ./logs ./results
+
+if command -v apptainer >/dev/null 2>&1; then
+    CTR="apptainer"
+elif command -v singularity >/dev/null 2>&1; then
+    CTR="singularity"
+else
+    echo "Neither apptainer nor singularity found."
+    exit 1
+fi
+
+for path in "${SCRIPT_PATH}" "${GT_JSON}" "${VTS_MODEL}"; do
+    test -f "${path}" || { echo "Missing file: ${path}"; exit 1; }
+done
+
+test -d "${VIDEO_DIR}" || { echo "Missing video dir: ${VIDEO_DIR}"; exit 1; }
+
+# =========================================================
+# inference
+# =========================================================
+${CTR} exec --nv \
+    --bind "${PWD}:${PWD}" \
+    --pwd "${PWD}" \
+    --env TOKENIZERS_PARALLELISM=false \
+    "${IMAGE}" \
+    bash -lc "
+
+echo '===== START DIRECT INFERENCE 7B ====='
+
+python ${SCRIPT_PATH} \
+    --gt-json ${GT_JSON} \
+    --video-dir ${VIDEO_DIR} \
+    --model-name ${MODEL_NAME} \
+    --vts-config ./GoMatching/configs/GoMatching_PP_BOVText_vit.yaml \
+    --vts-model ${VTS_MODEL} \
+    --output ${OUTPUT_JSON} \
+    --no-focus-bonus \
+    --layout-zoom off \
+    --crop-mode fixed \
+    --density-top-k 0 \
+    --density-nms 0.5 \
+    --no-object-detect
+    --ocr-top-k 10 \
+    --ocr-min-freq 2 \
+    --max-ocr-chars 500 
+
+"
+
+echo "Inference finished. Output json: ${OUTPUT_JSON}"
