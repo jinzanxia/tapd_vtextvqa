@@ -1,0 +1,113 @@
+#!/bin/bash
+#SBATCH --job-name=qwen_finetune_7b
+#SBATCH --partition=a100
+#SBATCH --gpus=1
+#SBATCH --nodes=1
+#SBATCH --ntasks-per-node=1
+#SBATCH --mem=80G
+#SBATCH --time=72:00:00
+#SBATCH -o ./logs/qwen_finetune_7b_421.%N.%j.out
+#SBATCH -e ./logs/qwen_finetune_7b_421.%N.%j.err
+
+set -euo pipefail
+
+IMAGE="docker://xiaojino/sfa:v1.2"
+TRAIN_SCRIPT_PATH="$PWD/infer_codes/qwen_finetune.py"
+EVAL_SCRIPT_PATH="$PWD/infer_codes/qwen.py"
+DATA_DIR="/mnt/fast/nobackup/scratch4weeks/nc324se/data/M4-ViteVQA"
+train_JSON="${DATA_DIR}/Annotations/ViteVQA_0.0.2_t1s1train.json"
+GT_JSON="${DATA_DIR}/Annotations/ViteVQA_0.0.2_t1s1val.json"
+VIDEO_DIR="${DATA_DIR}/video"
+VTS_MODEL="${DATA_DIR}/GoMatching_pp_vitaeb_bovtext.pth"
+OUTPUT_DIR="./checkpoints/qwen2_5_vl_7b_lora_4corners"
+OUTPUT_JSON="./results/qwen2_5_vl_7b_lora_val_4corners.json"
+
+mkdir -p ./logs ./results "${OUTPUT_DIR}"
+
+if command -v apptainer >/dev/null 2>&1; then
+    CTR="apptainer"
+elif command -v singularity >/dev/null 2>&1; then
+    CTR="singularity"
+else
+    echo "Neither apptainer nor singularity found."
+    exit 1
+fi
+
+for path in "${TRAIN_SCRIPT_PATH}" "${EVAL_SCRIPT_PATH}" "${GT_JSON}" "${VTS_MODEL}"; do
+    test -f "${path}" || { echo "Missing file: ${path}"; exit 1; }
+done
+
+test -d "${VIDEO_DIR}" || { echo "Missing video dir: ${VIDEO_DIR}"; exit 1; }
+
+# =========================================================
+# training
+# =========================================================
+${CTR} exec --nv \
+    --bind "${PWD}:${PWD}" \
+    --pwd "${PWD}" \
+    --env TOKENIZERS_PARALLELISM=false \
+    "${IMAGE}" \
+    bash -lc "
+python - <<'PYCODE' || pip install peft
+import peft
+print('PEFT OK:', peft.__version__)
+PYCODE
+
+echo '===== START TRAINING Qwen2.5-VL-7B-Instruct ====='
+python -m torch.distributed.run \
+    --standalone \
+    --nproc_per_node=1 \
+    ${TRAIN_SCRIPT_PATH} \
+    --gt-json ${train_JSON} \
+    --video-dir ${VIDEO_DIR} \
+    --model-name Qwen/Qwen2.5-VL-7B-Instruct \
+    --vts-config ./GoMatching/configs/GoMatching_PP_BOVText_vit.yaml \
+    --vts-model ${VTS_MODEL} \
+    --output-dir ${OUTPUT_DIR} \
+    --num-train-epochs 1 \
+    --train-batch-size 1 \
+    --learning-rate 1e-4 \
+    --warmup-steps 100 \
+    --gradient-accumulation-steps 2 
+    --max-target-length 64 \
+    --use-lora \
+    --lora-r 16 \
+    --lora-alpha 32 \
+    --lora-dropout 0.05 \
+    --lora-target-modules q_proj,k_proj,v_proj,o_proj,gate_proj,up_proj,down_proj \
+    --gradient-checkpointing \
+    --no-ocr-text \
+    --no-focus-bonus \
+    --layout-zoom off \
+    --crop-mode fixed \
+    --density-top-k 0 \
+    --density-nms 0.5 \
+    --no-object-detect
+
+echo '===== TRAINING FINISHED ====='
+
+# =========================================================
+# evaluation
+# =========================================================
+echo '===== START EVALUATION WITH ADAPTER ====='
+python ${EVAL_SCRIPT_PATH} \
+    --gt-json ${GT_JSON} \
+    --video-dir ${VIDEO_DIR} \
+    --model-name Qwen/Qwen2.5-VL-7B-Instruct \
+    --adapter-path ${OUTPUT_DIR}/final \
+    --vts-config ./GoMatching/configs/GoMatching_PP_BOVText_vit.yaml \
+    --vts-model ${VTS_MODEL} \
+    --output ${OUTPUT_JSON} \
+    --no-ocr-text \
+    --no-focus-bonus \
+    --layout-zoom off \
+    --crop-mode fixed \
+    --density-top-k 0 \
+    --density-nms 0.5 \
+    --no-object-detect
+
+"
+echo "baseline Fine-tuning + test finished. Output dir: ${OUTPUT_DIR}, result file: ${OUTPUT_JSON}"
+
+
+
