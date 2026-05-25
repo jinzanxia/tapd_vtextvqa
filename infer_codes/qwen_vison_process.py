@@ -788,7 +788,7 @@ def select_key_zoom(text_boxes_list, video, question, text_list=None, object_box
                 out.append(key)
         return out
 
-    def text_object_density_proposals(text_boxes, object_boxes, h, w, win_sizes, top_k=4, nms_thresh=0.5, stride_ratio=0.25):
+    def text_object_density_proposals(text_boxes, object_boxes, h, w, win_sizes, top_k=4, nms_thresh=0.5, stride_ratio=0.25, min_size_ratio_override=None):
         """
         先用文本框生成 density proposals，再扩展到包住 proposal+相关物体的最小外接矩形。
         相关物体定义：与 proposal IoU>0.1 或中心点落在 proposal 内。
@@ -802,7 +802,7 @@ def select_key_zoom(text_boxes_list, video, question, text_list=None, object_box
             fixed_scale=g_text_anchor_fixed_scale,
             adaptive_scales=g_text_anchor_scales,
         )
-        if not object_boxes or not proposals:
+        if not proposals:
             return proposals
         def iou(boxA, boxB):
             ax1, ay1, ax2, ay2 = boxA
@@ -818,7 +818,7 @@ def select_key_zoom(text_boxes_list, video, question, text_list=None, object_box
         for sx, sy, ww, wh in proposals:
             px1, py1, px2, py2 = sx, sy, sx+ww, sy+wh
             related = []
-            for ob in object_boxes:
+            for ob in (object_boxes or []):
                 ox1, oy1, ox2, oy2 = ob
                 # IoU > 0.1
                 if iou([px1, py1, px2, py2], ob) > 0.1:
@@ -842,7 +842,7 @@ def select_key_zoom(text_boxes_list, video, question, text_list=None, object_box
                 h,
                 w,
                 expand_ratio=g_cluster_expand_ratio,
-                min_size_ratio=g_cluster_min_size_ratio,
+                min_size_ratio=g_cluster_min_size_ratio if min_size_ratio_override is None else min_size_ratio_override,
             )
 
             if g_cluster_multi_scales:
@@ -939,6 +939,50 @@ def select_key_zoom(text_boxes_list, video, question, text_list=None, object_box
             (0, h - win_h, win_w, win_h),
             (w - win_w, h - win_h, win_w, win_h),
         ]
+
+        # hybrid: fixed 4 corners + text-density proposals across multiple window sizes
+        if g_crop_mode == 'hybrid' and text_boxes:
+            d_win_sizes = [
+                (int(0.4 * w), int(0.4 * h)),
+                (int(0.6 * w), int(0.6 * h)),
+                (int(0.8 * w), int(0.8 * h)),
+            ]
+            d_proposals = text_window_density_proposals(
+                text_boxes, h, w, d_win_sizes, top_k=g_density_top_k, nms_thresh=g_density_nms
+            )
+            for sx, sy, pw, ph in d_proposals:
+                candidate = (sx, sy, pw, ph)
+                if candidate not in crop_candidates:
+                    crop_candidates.append(candidate)
+
+        # hybrid_ob: fixed 4 corners + OCR-density proposals expanded to related objects.
+        # Each proposal uses the smallest frame-relative view that can contain the text/object union.
+        if g_crop_mode == 'hybrid_ob' and text_boxes:
+            d_win_sizes = [
+                (int(0.4 * w), int(0.4 * h)),
+                (int(0.6 * w), int(0.6 * h)),
+                (int(0.8 * w), int(0.8 * h)),
+            ]
+            d_proposals = text_object_density_proposals(
+                text_boxes, object_boxes, h, w, d_win_sizes,
+                top_k=g_density_top_k, nms_thresh=g_density_nms,
+                min_size_ratio_override=0.0,
+            )
+            for sx, sy, pw, ph in d_proposals:
+                min_size_ratio = 0.8
+                for candidate_ratio in (0.4, 0.6, 0.8):
+                    if pw <= candidate_ratio * w and ph <= candidate_ratio * h:
+                        min_size_ratio = candidate_ratio
+                        break
+                candidate = apply_expand_and_min_size(
+                    (sx, sy, pw, ph),
+                    h,
+                    w,
+                    expand_ratio=0.0,
+                    min_size_ratio=min_size_ratio,
+                )
+                if candidate not in crop_candidates:
+                    crop_candidates.append(candidate)
 
         # hybrid ablation: 只用单一 window size
         if g_crop_mode == 'hybrid_04' and text_boxes:

@@ -49,8 +49,8 @@ def get_parser():
     parser.add_argument("--ocr-pc-min-freq", type=int, default=1, help="min frame freq for post-correction OCR pool")
     parser.add_argument(
         "--crop-mode", type=str, default="fixed",
-        choices=["fixed", "density", "hybrid", "hybrid_04", "hybrid_06", "hybrid_08"],
-        help="crop mode: fixed (4 corners + layout), density (density only), hybrid (4 corners + density), hybrid_04/06/08 (ablation)"
+        choices=["fixed", "density", "hybrid", "hybrid_ob", "hybrid_04", "hybrid_06", "hybrid_08"],
+        help="crop mode: fixed (4 corners + layout), density (density only), hybrid (4 corners + density), hybrid_ob (4 corners + object-expanded density), hybrid_04/06/08 (ablation)"
     )
     parser.add_argument("--density-top-k", type=int, default=4, help="top-K proposals for density crop mode")
     parser.add_argument("--density-nms", type=float, default=0.5, help="NMS IoU threshold for density proposals")

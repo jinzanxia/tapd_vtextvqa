@@ -306,7 +306,7 @@ def parse_args():
     parser.add_argument("--use-focus-bonus", action="store_true", default=False)
     parser.add_argument("--no-focus-bonus", dest="use_focus_bonus", action="store_false")
     parser.add_argument("--layout-zoom", type=str, default="off", choices=["off", "centroid", "center", "full"])
-    parser.add_argument("--crop-mode", type=str, default="fixed", choices=["fixed", "density", "hybrid", "hybrid_04", "hybrid_06", "hybrid_08"])
+    parser.add_argument("--crop-mode", type=str, default="fixed", choices=["fixed", "density", "hybrid", "hybrid_ob", "hybrid_04", "hybrid_06", "hybrid_08"])
     parser.add_argument("--density-top-k", type=int, default=4)
     parser.add_argument("--density-nms", type=float, default=0.5)
     parser.add_argument("--cluster-expand-ratio", type=float, default=0.0)
