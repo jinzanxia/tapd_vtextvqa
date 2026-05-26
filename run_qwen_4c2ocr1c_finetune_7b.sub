@@ -19,8 +19,8 @@ train_JSON="${DATA_DIR}/Annotations/ViteVQA_0.0.2_t1s1train.json"
 GT_JSON="${DATA_DIR}/Annotations/ViteVQA_0.0.2_t1s1val.json"
 VIDEO_DIR="${DATA_DIR}/video"
 VTS_MODEL="${DATA_DIR}/GoMatching_pp_vitaeb_bovtext.pth"
-OUTPUT_DIR="./checkpoints/qwen2_5_vl_7b_lora_baseline"
-OUTPUT_JSON="./results/qwen2_5_vl_7b_lora_val_4corners_2de_1center.json"
+OUTPUT_DIR="./checkpoints/qwen2_5_vl_7b_lora_4c2ocr1c"
+OUTPUT_JSON="./results/qwen2_5_vl_7b_lora_val_4c2ocr1c.json"
 
 mkdir -p ./logs ./results "${OUTPUT_DIR}"
 
@@ -79,7 +79,7 @@ python -m torch.distributed.run \
     --no-ocr-text \
     --no-focus-bonus \
     --layout-zoom center \
-    --crop-mode hybrid \
+    --crop-mode hybrid_ob \
     --density-top-k 2 \
     --density-nms 0.5 \
     --no-object-detect
@@ -101,7 +101,7 @@ python ${EVAL_SCRIPT_PATH} \
     --no-ocr-text \
     --no-focus-bonus \
     --layout-zoom center \
-    --crop-mode hybrid \
+    --crop-mode hybrid_ob \
     --density-top-k 2 \
     --density-nms 0.5 \
     --no-object-detect
