@@ -64,30 +64,9 @@ python ${SCRIPT_PATH} \
     --density-top-k 0 \
     --density-nms 0.5 \
     --no-object-detect
-    --ocr-top-k 10 \
-    --ocr-min-freq 2 \
-    --max-ocr-chars 500 \
-    --conditional-ocr 
-
-echo "conditional-ocr enabled. Output json: ${OUTPUT_JSON}"
-
-
-python ${SCRIPT_PATH} \
-    --gt-json ${GT_JSON} \
-    --video-dir ${VIDEO_DIR} \
-    --model-name ${MODEL_NAME} \
-    --vts-config ./GoMatching/configs/GoMatching_PP_BOVText_vit.yaml \
-    --vts-model ${VTS_MODEL} \
-    --output ${OUTPUT_JSON} \
-    --no-focus-bonus \
-    --layout-zoom off \
-    --crop-mode fixed \
-    --density-top-k 0 \
-    --density-nms 0.5 \
-    --no-object-detect
     --ocr-top-k 5 \
     --ocr-min-freq 2 \
-    --max-ocr-chars 500 \
+    --max-ocr-chars 500 
     
 echo "ocr-top-k 5. Output json: ${OUTPUT_JSON}"
 
