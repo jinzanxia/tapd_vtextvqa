@@ -17,12 +17,12 @@ from PIL import Image
 import torch
 from transformers import Qwen2_5_VLForConditionalGeneration, AutoProcessor
 
-from ..parsing.question_parser import QuestionParser, parse_question
-from ..retrieval.frame_retrieval import retrieve_relevant_frames
-from ..retrieval.region_localization import localize_target_regions
-from ..retrieval.ocr_visibility import score_crop_visibility
-from ..reasoning.qwen_reasoning import run_vlm_reasoning
-from ..utils.prompt_builder import (
+from parsing.question_parser import QuestionParser, parse_question
+from retrieval.frame_retrieval import retrieve_relevant_frames
+from retrieval.region_localization import localize_target_regions
+from retrieval.ocr_visibility import score_crop_visibility
+from reasoning.qwen_reasoning import run_vlm_reasoning
+from utils.prompt_builder import (
     build_frame_retrieval_prompt,
     build_region_localization_prompt,
     build_ocr_visibility_prompt,

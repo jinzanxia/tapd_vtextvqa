@@ -256,7 +256,7 @@ class OCRVisibilityScorer:
         Returns:
             Visibility score in [0, 1]
         """
-        from ..utils.prompt_builder import build_ocr_visibility_prompt
+        from utils.prompt_builder import build_ocr_visibility_prompt
         
         try:
             visibility_prompt = build_ocr_visibility_prompt({"target": "text"})

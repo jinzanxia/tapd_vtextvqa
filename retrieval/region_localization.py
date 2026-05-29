@@ -95,7 +95,7 @@ class RegionLocalizer:
         Returns:
             List of bboxes with keys: x1, y1, x2, y2, confidence
         """
-        from ..utils.prompt_builder import build_region_localization_prompt
+        from utils.prompt_builder import build_region_localization_prompt
         
         try:
             # Build conversation for grounding

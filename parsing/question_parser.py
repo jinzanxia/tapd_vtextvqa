@@ -74,7 +74,7 @@ class QuestionParser:
                 "task": "ocr"
             }
         """
-        from ..utils.prompt_builder import build_question_parsing_prompt
+        from utils.prompt_builder import build_question_parsing_prompt
         
         prompt = build_question_parsing_prompt(question)
         

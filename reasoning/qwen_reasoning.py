@@ -50,7 +50,7 @@ class QwenReasoner:
         Returns:
             Generated answer string
         """
-        from ..utils.prompt_builder import (
+        from utils.prompt_builder import (
             build_final_reasoning_prompt,
             build_simple_reasoning_prompt
         )
@@ -95,7 +95,7 @@ class QwenReasoner:
         Returns:
             Generated answer
         """
-        from ..utils.prompt_builder import build_final_reasoning_prompt
+        from utils.prompt_builder import build_final_reasoning_prompt
         
         prompt = build_final_reasoning_prompt(question, context)
         
@@ -172,7 +172,7 @@ class QwenReasoner:
         Returns:
             Generated answer
         """
-        from ..utils.prompt_builder import build_simple_reasoning_prompt
+        from utils.prompt_builder import build_simple_reasoning_prompt
         
         prompt = build_simple_reasoning_prompt(question)
         if context:

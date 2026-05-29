@@ -144,7 +144,7 @@ class FrameRetriever:
         Returns:
             List of scores for the batch
         """
-        from ..utils.prompt_builder import build_frame_relevance_scoring_prompt
+        from utils.prompt_builder import build_frame_relevance_scoring_prompt
         
         batch_size = len(frames)
         scoring_prompt = build_frame_relevance_scoring_prompt(retrieval_prompt)
