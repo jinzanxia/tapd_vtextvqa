@@ -131,6 +131,33 @@ JSON:"""
     return prompt
 
 
+def build_crop_localization_scoring_prompt(parsed_question: Dict[str, str]) -> str:
+    """
+    Build prompt for verifying whether a candidate crop contains the target.
+
+    Args:
+        parsed_question: Structured question with keys: target, attribute, relation, task
+
+    Returns:
+        Prompt that asks for yes/no plus confidence.
+    """
+    target = parsed_question.get("target", "target")
+    attribute = parsed_question.get("attribute", "")
+
+    if attribute:
+        target_description = f"{attribute} {target}"
+    else:
+        target_description = target
+
+    prompt = f"""Does this cropped region contain the {target_description}?
+
+Return ONLY valid JSON:
+{{"answer": "yes" or "no", "confidence": <float 0-1>}}
+
+JSON:"""
+    return prompt
+
+
 def build_final_reasoning_prompt(original_question: str, context: str = "") -> str:
     """
     Build final reasoning prompt that combines global and local context.

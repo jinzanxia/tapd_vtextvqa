@@ -26,6 +26,7 @@ from utils.prompt_builder import (
     build_frame_retrieval_prompt,
     build_region_localization_prompt,
     build_ocr_visibility_prompt,
+    build_crop_localization_scoring_prompt,
 )
 
 logger = logging.getLogger(__name__)
@@ -73,7 +74,8 @@ class EvidenceMiningPipeline:
     def __init__(self,
                  model: Optional[Qwen2_5_VLForConditionalGeneration] = None,
                  processor: Optional[AutoProcessor] = None,
-                 device: str = "cuda:0"):
+                 device: str = "cuda:0",
+                 ocr_score_mode: str = "paddle"):
         """
         Initialize the evidence mining pipeline.
         
@@ -81,10 +83,12 @@ class EvidenceMiningPipeline:
             model: Qwen2.5-VL model instance. If None, loads default model.
             processor: AutoProcessor instance. If None, loads default processor.
             device: Device to run on (default: cuda:0)
+            ocr_score_mode: "paddle" or "vlm" for OCR readability scoring
         """
         self.model = model
         self.processor = processor
         self.device = device
+        self.ocr_score_mode = ocr_score_mode
         
         # Load model if not provided
         if self.model is None or self.processor is None:
@@ -215,10 +219,11 @@ class EvidenceMiningPipeline:
                 local_crop = None
             else:
                 # Stage 4: OCR Visibility Scoring
-                logger.info("Stage 4: OCR Visibility Scoring")
+                logger.info("Stage 4: Candidate Crop Scoring")
                 ocr_prompt = build_ocr_visibility_prompt(parsed_question)
+                crop_localization_prompt = build_crop_localization_scoring_prompt(parsed_question)
                 visibility_results = self._stage_4_score_visibility(
-                    localization_results, ocr_prompt, verbose
+                    localization_results, ocr_prompt, crop_localization_prompt, verbose
                 )
                 
                 if visibility_results["success"]:
@@ -325,14 +330,17 @@ class EvidenceMiningPipeline:
     def _stage_4_score_visibility(self,
                                   localization_results: List[Dict[str, Any]],
                                   ocr_prompt: str,
+                                  crop_localization_prompt: str,
                                   verbose: bool = False) -> Dict[str, Any]:
-        """Stage 4: Score OCR visibility and select best crop."""
+        """Stage 4: Score candidate crops and select best local evidence."""
         results = score_crop_visibility(
             localization_results,
             ocr_prompt,
+            crop_localization_prompt=crop_localization_prompt,
             model=self.model,
             processor=self.processor,
-            device=self.device
+            device=self.device,
+            ocr_score_mode=self.ocr_score_mode
         )
         
         if verbose and results["success"]:
@@ -367,6 +375,7 @@ def run_pipeline(question: str,
                 processor: Optional[AutoProcessor] = None,
                 device: str = "cuda:0",
                 top_k_frames: int = 5,
+                ocr_score_mode: str = "paddle",
                 verbose: bool = False) -> Dict[str, Any]:
     """
     Run the evidence mining pipeline.
@@ -378,6 +387,7 @@ def run_pipeline(question: str,
         processor: Optional processor
         device: Device to run on
         top_k_frames: Number of top frames to retrieve
+        ocr_score_mode: "paddle" or "vlm" for OCR readability scoring
         verbose: Print debug information
         
     Returns:
@@ -386,6 +396,7 @@ def run_pipeline(question: str,
     pipeline = EvidenceMiningPipeline(
         model=model,
         processor=processor,
-        device=device
+        device=device,
+        ocr_score_mode=ocr_score_mode
     )
     return pipeline.run(question, frames, top_k_frames, verbose)

@@ -40,7 +40,8 @@ class IntegratedVideoQAPipeline:
     def __init__(self, 
                  model_path: str,
                  adapter_path: str = None,
-                 device: str = "cuda:0"):
+                 device: str = "cuda:0",
+                 ocr_score_mode: str = "paddle"):
         """
         Initialize integrated pipeline.
         
@@ -48,8 +49,10 @@ class IntegratedVideoQAPipeline:
             model_path: Path to Qwen2.5-VL model
             adapter_path: Optional LoRA adapter path
             device: Device to run on
+            ocr_score_mode: "paddle" or "vlm" for OCR readability scoring
         """
         self.device = device
+        self.ocr_score_mode = ocr_score_mode
         self.model = None
         self.processor = None
         self.evidence_pipeline = None
@@ -92,7 +95,8 @@ class IntegratedVideoQAPipeline:
         self.evidence_pipeline = EvidenceMiningPipeline(
             model=self.model,
             processor=self.processor,
-            device=self.device
+            device=self.device,
+            ocr_score_mode=self.ocr_score_mode
         )
     
     def process_video_qas(self,

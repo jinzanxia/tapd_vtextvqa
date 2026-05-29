@@ -22,6 +22,7 @@ class OCRVisibilityScorer:
 
     _shared_ocr_model = None
     _ocr_load_attempted = False
+    _ocr_runtime_disabled = False
     
     def __init__(self,
                  model: Optional[Qwen2_5_VLForConditionalGeneration] = None,
@@ -29,7 +30,8 @@ class OCRVisibilityScorer:
                  device: str = "cuda:0",
                  alpha: float = 0.4,
                  beta: float = 0.3,
-                 gamma: float = 0.3):
+                 gamma: float = 0.3,
+                 ocr_score_mode: str = "paddle"):
         """
         Initialize OCR visibility scorer.
         
@@ -40,6 +42,7 @@ class OCRVisibilityScorer:
             alpha: Weight for OCR confidence (PaddleOCR)
             beta: Weight for sharpness (Laplacian variance)
             gamma: Weight for VLM visibility score
+            ocr_score_mode: "paddle" for PaddleOCR confidence or "vlm" for VLM readability
         """
         self.model = model
         self.processor = processor
@@ -47,9 +50,13 @@ class OCRVisibilityScorer:
         self.alpha = alpha
         self.beta = beta
         self.gamma = gamma
+        if ocr_score_mode not in {"paddle", "vlm"}:
+            logger.warning(f"Unknown OCR score mode '{ocr_score_mode}', using PaddleOCR")
+            ocr_score_mode = "paddle"
+        self.ocr_score_mode = ocr_score_mode
         
-        # PaddleOCR is expensive to initialize; keep one process-local model.
-        self.ocr_model = self._get_shared_ocr_model()
+        # PaddleOCR is expensive to initialize; load it only for the Paddle OCR mode.
+        self.ocr_model = self._get_shared_ocr_model() if self.ocr_score_mode == "paddle" else None
 
     @classmethod
     def _get_shared_ocr_model(cls):
@@ -71,7 +78,8 @@ class OCRVisibilityScorer:
     
     def score_crops(self,
                     candidate_regions: List[Dict[str, Any]],
-                    ocr_prompt: str) -> Dict[str, Any]:
+                    ocr_prompt: str,
+                    crop_localization_prompt: Optional[str] = None) -> Dict[str, Any]:
         """
         Score and select best OCR crop from candidate regions.
         
@@ -79,6 +87,7 @@ class OCRVisibilityScorer:
             candidate_regions: List of candidate region dicts from localize_target_regions
                               Each should have: frame, bbox, frame_score, region_score
             ocr_prompt: OCR readability assessment prompt
+            crop_localization_prompt: Prompt for verifying whether crop contains target
             
         Returns:
             Dict with best crop and scoring details
@@ -118,39 +127,45 @@ class OCRVisibilityScorer:
             region = crop_data["region"]
             
             # Compute individual scores
-            ocr_conf = self._compute_ocr_confidence(crop)
+            frame_score = self._clamp_score(region.get("frame_score", region.get("score", 0.5)))
+            localization_score = self._compute_localization_score(crop, crop_localization_prompt)
+            ocr_score = self._compute_ocr_score(crop, ocr_prompt)
             sharpness = self._compute_sharpness(crop)
-            vlm_score = self._compute_vlm_visibility(crop, ocr_prompt)
-            
-            # Normalize scores to [0, 1]
-            ocr_conf_norm = min(1.0, ocr_conf)
-            sharpness_norm = min(1.0, sharpness / 100.0)  # Normalize Laplacian variance
-            vlm_score_norm = vlm_score
-            
-            # Combine scores
-            combined_score = (
-                self.alpha * ocr_conf_norm +
-                self.beta * sharpness_norm +
-                self.gamma * vlm_score_norm
+
+            sharpness_score = self._normalize_sharpness(sharpness)
+
+            # Unified candidate crop scoring:
+            # S = 0.40 * localization + 0.30 * frame + 0.20 * OCR + 0.10 * sharpness
+            final_score = (
+                0.40 * localization_score +
+                0.30 * frame_score +
+                0.20 * ocr_score +
+                0.10 * sharpness_score
             )
             
             scores.append({
                 "region": region,
                 "crop": crop,
-                "ocr_confidence": ocr_conf_norm,
-                "sharpness": sharpness_norm,
-                "vlm_visibility": vlm_score_norm,
-                "combined_score": combined_score,
+                "frame_score": frame_score,
+                "localization_score": localization_score,
+                "ocr_score": ocr_score,
+                "ocr_score_mode": self.ocr_score_mode,
+                "sharpness": sharpness_score,
+                "sharpness_raw": sharpness,
+                "final_score": final_score,
+                "combined_score": final_score,
             })
         
-        # Select best crop
-        best_score_dict = max(scores, key=lambda x: x["combined_score"])
+        # Sort candidates and select top-1 evidence crop.
+        scores.sort(key=lambda x: x["final_score"], reverse=True)
+        best_score_dict = scores[0]
         
         logger.info(f"Selected best crop from {len(scores)} candidates")
-        logger.info(f"Score breakdown: OCR={best_score_dict['ocr_confidence']:.3f}, "
+        logger.info(f"Score breakdown: Localization={best_score_dict['localization_score']:.3f}, "
+                   f"Frame={best_score_dict['frame_score']:.3f}, "
+                   f"OCR={best_score_dict['ocr_score']:.3f}, "
                    f"Sharpness={best_score_dict['sharpness']:.3f}, "
-                   f"VLM={best_score_dict['vlm_visibility']:.3f}, "
-                   f"Combined={best_score_dict['combined_score']:.3f}")
+                   f"Final={best_score_dict['final_score']:.3f}")
         
         return {
             "success": True,
@@ -158,9 +173,13 @@ class OCRVisibilityScorer:
             "best_region": best_score_dict["region"],
             "scores": scores,
             "best_scores": {
-                "ocr_confidence": best_score_dict["ocr_confidence"],
+                "localization_score": best_score_dict["localization_score"],
+                "frame_score": best_score_dict["frame_score"],
+                "ocr_score": best_score_dict["ocr_score"],
+                "ocr_score_mode": best_score_dict["ocr_score_mode"],
                 "sharpness": best_score_dict["sharpness"],
-                "vlm_visibility": best_score_dict["vlm_visibility"],
+                "sharpness_raw": best_score_dict["sharpness_raw"],
+                "final_score": best_score_dict["final_score"],
                 "combined_score": best_score_dict["combined_score"],
             },
         }
@@ -259,6 +278,43 @@ class OCRVisibilityScorer:
             max(min_size, int(round(image.height * scale))),
         )
         return image.resize(new_size, Image.Resampling.BICUBIC)
+
+    def _compute_localization_score(self,
+                                    crop: Image.Image,
+                                    crop_localization_prompt: Optional[str]) -> float:
+        """
+        Verify whether the candidate crop actually contains the target object.
+
+        Returns:
+            Localization correctness score in [0, 1].
+        """
+        if not crop_localization_prompt or self.model is None or self.processor is None:
+            return 0.5
+
+        try:
+            crop = self._ensure_min_vlm_size(crop)
+            response = self._run_single_image_vlm_json(
+                crop,
+                crop_localization_prompt,
+                system_prompt="You are a precise visual localization verifier.",
+                max_new_tokens=64,
+            )
+            return self._extract_yes_confidence_score(response)
+        except Exception as e:
+            logger.error(f"Error computing localization score: {e}")
+            return 0.5
+
+    def _compute_ocr_score(self, crop: Image.Image, ocr_prompt: str) -> float:
+        """
+        Compute OCR readability using the configured scoring backend.
+
+        ocr_score_mode:
+            - "paddle": PaddleOCR recognition confidence
+            - "vlm": VLM readability judgment
+        """
+        if self.ocr_score_mode == "vlm":
+            return self._compute_vlm_visibility(crop, ocr_prompt)
+        return self._compute_ocr_confidence(crop)
     
     def _compute_ocr_confidence(self, crop: Image.Image) -> float:
         """
@@ -270,7 +326,7 @@ class OCRVisibilityScorer:
         Returns:
             Average OCR confidence in [0, 1]
         """
-        if self.ocr_model is None:
+        if self.ocr_model is None or self.__class__._ocr_runtime_disabled:
             logger.debug("PaddleOCR not available, using default OCR confidence")
             return 0.5
         
@@ -291,7 +347,11 @@ class OCRVisibilityScorer:
             return float(avg_confidence)
             
         except Exception as e:
-            logger.error(f"Error computing OCR confidence: {e}")
+            self.__class__._ocr_runtime_disabled = True
+            logger.warning(
+                "Disabling PaddleOCR confidence scoring after runtime error; "
+                f"using default OCR confidence for the rest of this process. Error: {e}"
+            )
             return 0.5
 
     def _run_ocr(self, crop_np: np.ndarray):
@@ -399,65 +459,69 @@ class OCRVisibilityScorer:
         Returns:
             Visibility score in [0, 1]
         """
-        from utils.prompt_builder import build_ocr_visibility_prompt
-        
         try:
             crop = self._ensure_min_vlm_size(crop)
-            visibility_prompt = build_ocr_visibility_prompt({"target": "text"})
-            
-            # Build conversation
-            conversation = [
-                {"role": "system", "content": "You are an expert in OCR text visibility assessment."},
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "image"},
-                        {"type": "text", "text": visibility_prompt},
-                    ]
-                },
-            ]
-            
-            text = self.processor.apply_chat_template(
-                conversation,
-                tokenize=False,
-                add_generation_prompt=True
+            response = self._run_single_image_vlm_json(
+                crop,
+                ocr_prompt,
+                system_prompt="You are an expert in OCR text visibility assessment.",
+                max_new_tokens=128,
             )
-            
-            inputs = self.processor(
-                text=[text],
-                images=[crop],
-                padding=True,
-                return_tensors="pt",
-            )
-            inputs = inputs.to(self.model.device)
-            
-            # Generate response
-            with torch.no_grad():
-                output_ids = self.model.generate(
-                    **inputs,
-                    max_new_tokens=128,
-                    do_sample=False,
-                    temperature=0,
-                    num_beams=1,
-                )
-            
-            # Decode response
-            generated_ids_trimmed = [
-                out_ids[len(in_ids):] 
-                for in_ids, out_ids in zip(inputs.input_ids, output_ids)
-            ]
-            response = self.processor.batch_decode(
-                generated_ids_trimmed,
-                skip_special_tokens=True,
-                clean_up_tokenization_spaces=False
-            )[0].strip()
-            
-            # Extract score
             return self._extract_visibility_score(response)
             
         except Exception as e:
             logger.error(f"Error computing VLM visibility: {e}")
             return 0.5
+
+    def _run_single_image_vlm_json(self,
+                                   image: Image.Image,
+                                   prompt: str,
+                                   system_prompt: str,
+                                   max_new_tokens: int = 128) -> str:
+        """Run deterministic single-image VLM scoring and return raw text."""
+        conversation = [
+            {"role": "system", "content": system_prompt},
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image"},
+                    {"type": "text", "text": prompt},
+                ]
+            },
+        ]
+
+        text = self.processor.apply_chat_template(
+            conversation,
+            tokenize=False,
+            add_generation_prompt=True
+        )
+
+        inputs = self.processor(
+            text=[text],
+            images=[image],
+            padding=True,
+            return_tensors="pt",
+        )
+        inputs = inputs.to(self.model.device)
+
+        with torch.no_grad():
+            output_ids = self.model.generate(
+                **inputs,
+                max_new_tokens=max_new_tokens,
+                do_sample=False,
+                temperature=0,
+                num_beams=1,
+            )
+
+        generated_ids_trimmed = [
+            out_ids[len(in_ids):]
+            for in_ids, out_ids in zip(inputs.input_ids, output_ids)
+        ]
+        return self.processor.batch_decode(
+            generated_ids_trimmed,
+            skip_special_tokens=True,
+            clean_up_tokenization_spaces=False
+        )[0].strip()
     
     @staticmethod
     def _extract_visibility_score(response: str) -> float:
@@ -492,27 +556,74 @@ class OCRVisibilityScorer:
             logger.debug(f"Error extracting visibility score: {e}")
             return 0.5
 
+    @classmethod
+    def _extract_yes_confidence_score(cls, response: str) -> float:
+        """Extract localization score from {"answer": "yes/no", "confidence": x}."""
+        import json
+
+        try:
+            start_idx = response.find('{')
+            end_idx = response.rfind('}') + 1
+
+            if start_idx >= 0 and end_idx > start_idx:
+                data = json.loads(response[start_idx:end_idx])
+                answer = str(data.get("answer", "")).lower()
+                confidence = cls._clamp_score(data.get("confidence", 0.5))
+
+                if answer.startswith("yes"):
+                    return confidence
+                if answer.startswith("no"):
+                    return 0.0
+                return 0.5 * confidence
+
+            response_lower = response.lower()
+            if "yes" in response_lower:
+                return 0.8
+            if "no" in response_lower:
+                return 0.0
+            return 0.5
+        except Exception as e:
+            logger.debug(f"Error extracting yes/no confidence score: {e}")
+            return 0.5
+
+    @staticmethod
+    def _normalize_sharpness(sharpness: float) -> float:
+        """Normalize Laplacian variance to [0, 1] for crop scoring."""
+        return OCRVisibilityScorer._clamp_score(sharpness / 100.0)
+
+    @staticmethod
+    def _clamp_score(value: Any) -> float:
+        """Clamp numeric score to [0, 1], defaulting to 0.5 on bad input."""
+        try:
+            return max(0.0, min(1.0, float(value)))
+        except (TypeError, ValueError):
+            return 0.5
+
 
 def score_crop_visibility(candidate_regions: List[Dict[str, Any]],
                          ocr_prompt: str,
+                         crop_localization_prompt: Optional[str] = None,
                          model: Optional[Qwen2_5_VLForConditionalGeneration] = None,
                          processor: Optional[AutoProcessor] = None,
                          device: str = "cuda:0",
                          alpha: float = 0.4,
                          beta: float = 0.3,
-                         gamma: float = 0.3) -> Dict[str, Any]:
+                         gamma: float = 0.3,
+                         ocr_score_mode: str = "paddle") -> Dict[str, Any]:
     """
     Score crop visibility and select best OCR crop.
     
     Args:
         candidate_regions: Output from localize_target_regions
         ocr_prompt: OCR visibility assessment prompt
+        crop_localization_prompt: Prompt for candidate crop target verification
         model: Optional Qwen model
         processor: Optional processor
         device: Device to run on
-        alpha: Weight for OCR confidence
-        beta: Weight for sharpness
-        gamma: Weight for VLM visibility
+        alpha: Deprecated legacy OCR weight; kept for call compatibility
+        beta: Deprecated legacy sharpness weight; kept for call compatibility
+        gamma: Deprecated legacy VLM visibility weight; kept for call compatibility
+        ocr_score_mode: "paddle" or "vlm"
         
     Returns:
         Dict with best_crop and scoring details
@@ -523,6 +634,7 @@ def score_crop_visibility(candidate_regions: List[Dict[str, Any]],
         device=device,
         alpha=alpha,
         beta=beta,
-        gamma=gamma
+        gamma=gamma,
+        ocr_score_mode=ocr_score_mode
     )
-    return scorer.score_crops(candidate_regions, ocr_prompt)
+    return scorer.score_crops(candidate_regions, ocr_prompt, crop_localization_prompt)

@@ -158,6 +158,12 @@ def get_parser():
         default=5,
         help="Number of top frames to retrieve (default: 5)"
     )
+    parser.add_argument(
+        "--ocr-score-mode",
+        choices=["paddle", "vlm"],
+        default="paddle",
+        help="OCR readability scoring backend for local evidence crops (default: paddle)"
+    )
     
     # Compatibility arguments (for baseline modes)
     parser.add_argument("--no-ocr-text", action="store_true", default=False)
@@ -244,7 +250,8 @@ def main():
             pipeline = IntegratedVideoQAPipeline(
                 model_path=args.model_name,
                 adapter_path=args.adapter_path,
-                device=device
+                device=device,
+                ocr_score_mode=args.ocr_score_mode
             )
             logger.info("Pipeline initialized\n")
         except Exception as e:

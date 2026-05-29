@@ -46,6 +46,7 @@ case "${INFERENCE_MODE}" in
         OUTPUT_JSON="./results/qwen2_5_vl_7b_evidence_mining_val.json"
         NUM_SAMPLED_FRAMES=16
         TOP_K_FRAMES=5
+        OCR_SCORE_MODE="${OCR_SCORE_MODE:-paddle}"
         MODE_LABEL="Evidence Mining Pipeline"
         ;;
     baseline)
@@ -107,6 +108,7 @@ echo "Output: ${OUTPUT_JSON}"
 if [ "${INFERENCE_MODE}" = "evidence" ]; then
     echo "Sampled Frames: ${NUM_SAMPLED_FRAMES}"
     echo "Top-K Frames: ${TOP_K_FRAMES}"
+    echo "OCR Score Mode: ${OCR_SCORE_MODE}"
     echo "Install PaddleOCR: ${INSTALL_PADDLEOCR}"
 fi
 echo "Submitted at: $(date)"
@@ -129,6 +131,10 @@ echo 'Mode: ${MODE_LABEL}'
 echo 'Timestamp: '$(date)
 echo ''
 
+export FLAGS_enable_pir_api=0
+export FLAGS_use_pir_api=0
+export FLAGS_enable_onednn=0
+
 if [ '${INFERENCE_MODE}' = 'evidence' ]; then
     if [ '${INSTALL_PADDLEOCR}' = '1' ]; then
         python -c 'import paddleocr' >/dev/null 2>&1 || \
@@ -146,7 +152,8 @@ if [ '${INFERENCE_MODE}' = 'evidence' ]; then
         --output ${OUTPUT_JSON} \
         --use-evidence-mining \
         --num-sampled-frames ${NUM_SAMPLED_FRAMES} \
-        --top-k-frames ${TOP_K_FRAMES}
+        --top-k-frames ${TOP_K_FRAMES} \
+        --ocr-score-mode ${OCR_SCORE_MODE}
 elif [ '${INFERENCE_MODE}' = 'baseline' ]; then
     # SFA Baseline
     python ${SCRIPT_PATH} \
