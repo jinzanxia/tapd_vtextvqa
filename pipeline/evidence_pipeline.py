@@ -102,6 +102,18 @@ class EvidenceMiningPipeline:
         """
         try:
             logger.info(f"Starting evidence mining pipeline for question: {question}")
+
+            if not frames:
+                logger.warning("No input frames provided to evidence mining pipeline")
+                return {
+                    "success": False,
+                    "answer": "Failed to process video",
+                    "error": "no input frames",
+                    "parsed_question": None,
+                    "retrieval_results": [],
+                    "localization_results": [],
+                    "visibility_results": None,
+                }
             
             # Stage 1: Question Structural Parsing
             logger.info("Stage 1: Question Structural Parsing")
@@ -116,9 +128,8 @@ class EvidenceMiningPipeline:
             
             if not retrieval_results:
                 logger.warning("No frames retrieved, using first frame as fallback")
-                if isinstance(frames[0], np.ndarray):
-                    frames[0] = Image.fromarray(frames[0].astype(np.uint8))
                 return {
+                    "success": False,
                     "answer": "Unable to find relevant frames",
                     "parsed_question": parsed_question,
                     "retrieval_results": [],

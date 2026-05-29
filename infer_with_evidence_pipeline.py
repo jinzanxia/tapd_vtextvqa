@@ -67,6 +67,54 @@ except Exception as e:
 from metric import anls_metric, stvqa_acc_metric
 
 
+def sample_frames_from_video(video_path, num_frames):
+    """Sample RGB frames uniformly from a video file."""
+    try:
+        import cv2
+    except ImportError as e:
+        logger.error(f"OpenCV is required for frame sampling: {e}")
+        return []
+
+    if not os.path.exists(video_path):
+        logger.warning(f"Video not found: {video_path}")
+        return []
+
+    cap = cv2.VideoCapture(video_path)
+    try:
+        if not cap.isOpened():
+            logger.warning(f"Could not open video: {video_path}")
+            return []
+
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        if total_frames <= 0:
+            logger.warning(f"Invalid or empty video: {video_path}")
+            return []
+
+        num_frames = max(1, min(num_frames, total_frames))
+        if num_frames == 1:
+            frame_indices = [total_frames // 2]
+        else:
+            frame_indices = [
+                round(i * (total_frames - 1) / (num_frames - 1))
+                for i in range(num_frames)
+            ]
+
+        frames = []
+        for frame_idx in frame_indices:
+            cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
+            ret, frame = cap.read()
+            if not ret or frame is None:
+                logger.warning(f"Failed to read frame {frame_idx} from {video_path}")
+                continue
+            frames.append(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+
+        if not frames:
+            logger.warning(f"No frames sampled from {video_path}")
+        return frames
+    finally:
+        cap.release()
+
+
 def get_parser():
     """Create argument parser."""
     parser = argparse.ArgumentParser(
@@ -228,7 +276,7 @@ def main():
             video_file = data.get('video', vid + '.mp4')
             video_path = os.path.join(args.video_dir, video_file)
         else:
-            logger.warning(f"Unknown dataset format for QA: {qid}")
+            logger.warning(f"Unknown dataset format for QA: {data}")
             continue
         
         # Construct video path
@@ -243,14 +291,19 @@ def main():
         start_time = time.time()
         try:
             if args.use_evidence_mining:
-                # Use evidence mining pipeline
-                result = pipeline.evidence_pipeline.run(
-                    question,
-                    frames=[],  # Will be loaded internally
-                    top_k_frames=args.top_k_frames,
-                    verbose=args.verbose
-                )
-                response = result['answer']
+                frames = sample_frames_from_video(video_path, args.num_sampled_frames)
+                if not frames:
+                    logger.error(f"Skipping QA {qid}: failed to sample frames from {video_path}")
+                    response = "Failed to process video"
+                else:
+                    # Use evidence mining pipeline
+                    result = pipeline.evidence_pipeline.run(
+                        question,
+                        frames=frames,
+                        top_k_frames=args.top_k_frames,
+                        verbose=args.verbose
+                    )
+                    response = result['answer']
             else:
                 # Fallback: use simple baseline (not fully implemented here)
                 logger.warning("Baseline mode not fully implemented in this script")
@@ -311,7 +364,8 @@ def main():
     logger.info(f"Accuracy: {acc:.4f}")
     logger.info(f"ANLS: {anls:.4f}")
     logger.info(f"Total Time: {total_time:.2f}s")
-    logger.info(f"Avg Time per Question: {total_time/len(pred_ans):.2f}s")
+    avg_time = total_time / len(pred_ans) if pred_ans else 0.0
+    logger.info(f"Avg Time per Question: {avg_time:.2f}s")
     logger.info(f"Output: {args.output}")
     logger.info("="*70)
 
