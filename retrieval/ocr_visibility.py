@@ -7,6 +7,7 @@ Uses OCR confidence, sharpness, and VLM visibility scoring.
 """
 
 import logging
+import os
 from typing import List, Dict, Any, Optional
 import cv2
 import numpy as np
@@ -66,6 +67,11 @@ class OCRVisibilityScorer:
 
         cls._ocr_load_attempted = True
         try:
+            os.environ.setdefault("FLAGS_enable_pir_api", "0")
+            os.environ.setdefault("FLAGS_use_pir_api", "0")
+            os.environ.setdefault("FLAGS_enable_onednn", "0")
+            os.environ.setdefault("FLAGS_use_onednn", "0")
+            os.environ.setdefault("FLAGS_use_mkldnn", "0")
             from paddleocr import PaddleOCR
             cls._shared_ocr_model = PaddleOCR(use_angle_cls=True, lang='en')
             logger.info("PaddleOCR loaded successfully")
@@ -314,7 +320,11 @@ class OCRVisibilityScorer:
         """
         if self.ocr_score_mode == "vlm":
             return self._compute_vlm_visibility(crop, ocr_prompt)
-        return self._compute_ocr_confidence(crop)
+
+        paddle_score = self._compute_ocr_confidence(crop)
+        if self.__class__._ocr_runtime_disabled:
+            return self._compute_vlm_visibility(crop, ocr_prompt)
+        return paddle_score
     
     def _compute_ocr_confidence(self, crop: Image.Image) -> float:
         """
