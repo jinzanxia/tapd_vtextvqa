@@ -23,6 +23,11 @@ INFERENCE_MODE="${1:-evidence}"
 # Container image
 IMAGE="docker://xiaojino/sfa:v1.2"
 
+# Set to 1 to install PaddleOCR inside the container before evidence inference.
+# This improves OCR confidence scoring, but it requires package download access
+# from the compute node unless the image already has PaddleOCR.
+INSTALL_PADDLEOCR="${INSTALL_PADDLEOCR:-1}"
+
 # Data configuration
 DATA_DIR="/mnt/fast/nobackup/scratch4weeks/nc324se/data/M4-ViteVQA"
 GT_JSON="${DATA_DIR}/Annotations/ViteVQA_0.0.2_t1s1val.json"
@@ -102,6 +107,7 @@ echo "Output: ${OUTPUT_JSON}"
 if [ "${INFERENCE_MODE}" = "evidence" ]; then
     echo "Sampled Frames: ${NUM_SAMPLED_FRAMES}"
     echo "Top-K Frames: ${TOP_K_FRAMES}"
+    echo "Install PaddleOCR: ${INSTALL_PADDLEOCR}"
 fi
 echo "Submitted at: $(date)"
 echo "========================================================="
@@ -124,6 +130,12 @@ echo 'Timestamp: '$(date)
 echo ''
 
 if [ '${INFERENCE_MODE}' = 'evidence' ]; then
+    if [ '${INSTALL_PADDLEOCR}' = '1' ]; then
+        python -c 'import paddleocr' >/dev/null 2>&1 || \
+            python -m pip install --user --no-cache-dir paddlepaddle paddleocr || \
+            echo 'WARNING: PaddleOCR installation failed; continuing without OCR confidence scoring.'
+    fi
+
     # Evidence Mining Pipeline
     python ${SCRIPT_PATH} \
         --gt-json ${GT_JSON} \

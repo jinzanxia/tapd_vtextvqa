@@ -118,6 +118,9 @@ class QwenReasoner:
                 tokenize=False,
                 add_generation_prompt=True
             )
+
+            global_frame = self._ensure_min_vlm_size(global_frame)
+            local_crop = self._ensure_min_vlm_size(local_crop)
             
             inputs = self.processor(
                 text=[text],
@@ -196,6 +199,8 @@ class QwenReasoner:
                 tokenize=False,
                 add_generation_prompt=True
             )
+
+            image = self._ensure_min_vlm_size(image)
             
             inputs = self.processor(
                 text=[text],
@@ -235,6 +240,19 @@ class QwenReasoner:
             logger.error(f"Error reasoning with single image: {e}")
             return f"Unable to process: {str(e)}"
     
+    @staticmethod
+    def _ensure_min_vlm_size(image: Image.Image, min_size: int = 336) -> Image.Image:
+        """Resize images that are too small for Qwen-VL's patch processor."""
+        if image.width >= min_size and image.height >= min_size:
+            return image
+
+        scale = max(min_size / max(image.width, 1), min_size / max(image.height, 1))
+        new_size = (
+            max(min_size, int(round(image.width * scale))),
+            max(min_size, int(round(image.height * scale))),
+        )
+        return image.resize(new_size, Image.Resampling.BICUBIC)
+
     @staticmethod
     def _clean_response(response: str) -> str:
         """

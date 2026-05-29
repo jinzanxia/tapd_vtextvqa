@@ -162,24 +162,88 @@ class OCRVisibilityScorer:
             Cropped PIL Image or None if extraction fails
         """
         try:
-            # Ensure bbox coordinates are integers
-            x1 = max(0, int(bbox["x1"]))
-            y1 = max(0, int(bbox["y1"]))
-            x2 = min(frame.width, int(bbox["x2"]))
-            y2 = min(frame.height, int(bbox["y2"]))
+            raw_x1 = float(bbox["x1"])
+            raw_y1 = float(bbox["y1"])
+            raw_x2 = float(bbox["x2"])
+            raw_y2 = float(bbox["y2"])
+
+            # Some VLMs return normalized boxes. Convert them before rounding.
+            if max(raw_x1, raw_y1, raw_x2, raw_y2) <= 1.5:
+                raw_x1 *= frame.width
+                raw_x2 *= frame.width
+                raw_y1 *= frame.height
+                raw_y2 *= frame.height
+
+            x1 = max(0, int(raw_x1))
+            y1 = max(0, int(raw_y1))
+            x2 = min(frame.width, int(raw_x2))
+            y2 = min(frame.height, int(raw_y2))
             
             # Validate crop
             if x1 >= x2 or y1 >= y2:
                 logger.warning(f"Invalid crop coordinates: ({x1}, {y1}, {x2}, {y2})")
                 return None
+
+            x1, y1, x2, y2 = self._expand_bbox_adaptively(
+                x1, y1, x2, y2, frame.width, frame.height
+            )
             
             # Extract crop
             crop = frame.crop((x1, y1, x2, y2))
+            crop = self._ensure_min_vlm_size(crop)
             return crop
             
         except Exception as e:
             logger.error(f"Error extracting crop: {e}")
             return None
+
+    @staticmethod
+    def _expand_bbox_adaptively(x1: int,
+                                y1: int,
+                                x2: int,
+                                y2: int,
+                                frame_w: int,
+                                frame_h: int) -> tuple:
+        """Expand bbox with more context for small text regions."""
+        box_w = x2 - x1
+        box_h = y2 - y1
+        bbox_ratio = (box_w * box_h) / max(frame_w * frame_h, 1)
+
+        if bbox_ratio < 0.02:
+            expand_ratio = 3.0
+        elif bbox_ratio < 0.1:
+            expand_ratio = 2.0
+        else:
+            expand_ratio = 1.3
+
+        target_w = int(round(box_w * expand_ratio))
+        target_h = int(round(box_h * expand_ratio))
+
+        cx = (x1 + x2) // 2
+        cy = (y1 + y2) // 2
+
+        new_x1 = max(0, cx - target_w // 2)
+        new_y1 = max(0, cy - target_h // 2)
+        new_x2 = min(frame_w, new_x1 + target_w)
+        new_y2 = min(frame_h, new_y1 + target_h)
+
+        new_x1 = max(0, new_x2 - target_w)
+        new_y1 = max(0, new_y2 - target_h)
+
+        return new_x1, new_y1, new_x2, new_y2
+
+    @staticmethod
+    def _ensure_min_vlm_size(image: Image.Image, min_size: int = 336) -> Image.Image:
+        """Resize images that are too small for Qwen-VL's patch processor."""
+        if image.width >= min_size and image.height >= min_size:
+            return image
+
+        scale = max(min_size / max(image.width, 1), min_size / max(image.height, 1))
+        new_size = (
+            max(min_size, int(round(image.width * scale))),
+            max(min_size, int(round(image.height * scale))),
+        )
+        return image.resize(new_size, Image.Resampling.BICUBIC)
     
     def _compute_ocr_confidence(self, crop: Image.Image) -> float:
         """
@@ -206,8 +270,16 @@ class OCRVisibilityScorer:
                 logger.debug("No text detected in crop")
                 return 0.0
             
-            # Compute average confidence
-            confidences = [box[-1] for box in results[0]]
+            # Compute average confidence. PaddleOCR commonly returns
+            # [points, (text, confidence)], but newer versions may differ.
+            confidences = []
+            for box in results[0]:
+                if isinstance(box, (list, tuple)) and len(box) >= 2:
+                    text_info = box[1]
+                    if isinstance(text_info, (list, tuple)) and len(text_info) >= 2:
+                        confidences.append(float(text_info[1]))
+                    elif isinstance(text_info, (int, float)):
+                        confidences.append(float(text_info))
             avg_confidence = np.mean(confidences) if confidences else 0.0
             
             return float(avg_confidence)
@@ -259,6 +331,7 @@ class OCRVisibilityScorer:
         from utils.prompt_builder import build_ocr_visibility_prompt
         
         try:
+            crop = self._ensure_min_vlm_size(crop)
             visibility_prompt = build_ocr_visibility_prompt({"target": "text"})
             
             # Build conversation
