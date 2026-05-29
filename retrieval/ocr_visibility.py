@@ -19,6 +19,9 @@ logger = logging.getLogger(__name__)
 
 class OCRVisibilityScorer:
     """Score OCR visibility and readability of candidate crops."""
+
+    _shared_ocr_model = None
+    _ocr_load_attempted = False
     
     def __init__(self,
                  model: Optional[Qwen2_5_VLForConditionalGeneration] = None,
@@ -45,14 +48,26 @@ class OCRVisibilityScorer:
         self.beta = beta
         self.gamma = gamma
         
-        # Try to import PaddleOCR for OCR confidence scoring
-        self.ocr_model = None
+        # PaddleOCR is expensive to initialize; keep one process-local model.
+        self.ocr_model = self._get_shared_ocr_model()
+
+    @classmethod
+    def _get_shared_ocr_model(cls):
+        """Return a shared PaddleOCR instance, loading it at most once."""
+        if cls._ocr_load_attempted:
+            return cls._shared_ocr_model
+
+        cls._ocr_load_attempted = True
         try:
             from paddleocr import PaddleOCR
-            self.ocr_model = PaddleOCR(use_angle_cls=True, lang='en')
+            cls._shared_ocr_model = PaddleOCR(use_angle_cls=True, lang='en')
             logger.info("PaddleOCR loaded successfully")
         except ImportError:
             logger.warning("PaddleOCR not available. Will skip OCR confidence scoring.")
+        except Exception as e:
+            logger.warning(f"Failed to load PaddleOCR. Will skip OCR confidence scoring: {e}")
+
+        return cls._shared_ocr_model
     
     def score_crops(self,
                     candidate_regions: List[Dict[str, Any]],
@@ -263,23 +278,14 @@ class OCRVisibilityScorer:
             # Convert PIL to numpy
             crop_np = np.array(crop)
             
-            # Run OCR
-            results = self.ocr_model.ocr(crop_np, cls=True)
+            # Run OCR. Newer PaddleOCR versions no longer accept cls=... here.
+            results = self._run_ocr(crop_np)
             
             if not results or not results[0]:
                 logger.debug("No text detected in crop")
                 return 0.0
             
-            # Compute average confidence. PaddleOCR commonly returns
-            # [points, (text, confidence)], but newer versions may differ.
-            confidences = []
-            for box in results[0]:
-                if isinstance(box, (list, tuple)) and len(box) >= 2:
-                    text_info = box[1]
-                    if isinstance(text_info, (list, tuple)) and len(text_info) >= 2:
-                        confidences.append(float(text_info[1]))
-                    elif isinstance(text_info, (int, float)):
-                        confidences.append(float(text_info))
+            confidences = self._extract_ocr_confidences(results)
             avg_confidence = np.mean(confidences) if confidences else 0.0
             
             return float(avg_confidence)
@@ -287,6 +293,71 @@ class OCRVisibilityScorer:
         except Exception as e:
             logger.error(f"Error computing OCR confidence: {e}")
             return 0.5
+
+    def _run_ocr(self, crop_np: np.ndarray):
+        """Run PaddleOCR across old and new PaddleOCR APIs."""
+        if hasattr(self.ocr_model, "ocr"):
+            try:
+                return self.ocr_model.ocr(crop_np)
+            except TypeError as e:
+                logger.debug(f"PaddleOCR.ocr failed, trying predict(): {e}")
+
+        if hasattr(self.ocr_model, "predict"):
+            return self.ocr_model.predict(crop_np)
+
+        raise AttributeError("PaddleOCR model has neither ocr() nor predict()")
+
+    @classmethod
+    def _extract_ocr_confidences(cls, results: Any) -> List[float]:
+        """Extract text recognition confidences from PaddleOCR result variants."""
+        confidences = []
+        cls._collect_confidences(results, confidences)
+        return confidences
+
+    @classmethod
+    def _collect_confidences(
+        cls,
+        value: Any,
+        confidences: List[float],
+        allow_numeric: bool = False,
+    ) -> None:
+        if value is None:
+            return
+
+        if isinstance(value, dict):
+            for key in ("score", "confidence", "rec_score", "rec_scores"):
+                if key in value:
+                    cls._collect_confidences(value[key], confidences, allow_numeric=True)
+            for key in ("res", "data", "result", "ocr_result", "rec_texts"):
+                if key in value:
+                    cls._collect_confidences(value[key], confidences)
+            return
+
+        if isinstance(value, (list, tuple)):
+            if cls._looks_like_legacy_text_info(value):
+                confidences.append(float(value[1]))
+                return
+            for item in value:
+                cls._collect_confidences(item, confidences, allow_numeric=allow_numeric)
+            return
+
+        if (
+            allow_numeric
+            and isinstance(value, (int, float, np.floating))
+            and 0.0 <= float(value) <= 1.0
+        ):
+            confidences.append(float(value))
+
+    @staticmethod
+    def _looks_like_legacy_text_info(value: Any) -> bool:
+        """Match PaddleOCR legacy tuples like ('text', 0.98)."""
+        return (
+            isinstance(value, (list, tuple))
+            and len(value) >= 2
+            and isinstance(value[0], str)
+            and isinstance(value[1], (int, float, np.floating))
+            and 0.0 <= float(value[1]) <= 1.0
+        )
     
     @staticmethod
     def _compute_sharpness(crop: Image.Image) -> float:

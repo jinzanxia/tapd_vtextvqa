@@ -30,6 +30,37 @@ from utils.prompt_builder import (
 
 logger = logging.getLogger(__name__)
 
+LOCALIZATION_KEYWORDS = [
+    "say", "written", "text", "word", "sign",
+    "license", "number", "logo", "read",
+    "on the", "written on", "shown on",
+]
+
+NO_LOCALIZATION_KEYWORDS = [
+    "percent", "increase", "decrease", "chart",
+    "graph", "trend", "price", "stock",
+]
+
+
+def route_question(question: str) -> str:
+    """
+    Route a question to local evidence mining or global frame reasoning.
+
+    Returns:
+        "local" for OCR/small-target/region-based questions, otherwise "global".
+    """
+    q = question.lower()
+
+    for kw in NO_LOCALIZATION_KEYWORDS:
+        if kw in q:
+            return "global"
+
+    for kw in LOCALIZATION_KEYWORDS:
+        if kw in q:
+            return "local"
+
+    return "global"
+
 
 class EvidenceMiningPipeline:
     """
@@ -94,6 +125,7 @@ class EvidenceMiningPipeline:
         Returns:
             Dict with keys:
                 - answer: Final generated answer
+                - question_type: "local" or "global" routing decision
                 - parsed_question: Structured question representation
                 - retrieval_results: Top retrieved frames
                 - localization_results: Candidate regions
@@ -102,6 +134,8 @@ class EvidenceMiningPipeline:
         """
         try:
             logger.info(f"Starting evidence mining pipeline for question: {question}")
+            question_type = route_question(question)
+            logger.info(f"Question Type Routing: {question_type}")
 
             if not frames:
                 logger.warning("No input frames provided to evidence mining pipeline")
@@ -110,33 +144,64 @@ class EvidenceMiningPipeline:
                     "answer": "Failed to process video",
                     "error": "no input frames",
                     "parsed_question": None,
+                    "question_type": question_type,
                     "retrieval_results": [],
                     "localization_results": [],
                     "visibility_results": None,
                 }
-            
-            # Stage 1: Question Structural Parsing
-            logger.info("Stage 1: Question Structural Parsing")
-            parsed_question = self._stage_1_parse_question(question, verbose)
-            
-            # Stage 2: Frame-Level Relevant Frame Retrieval
+
+            parsed_question = None
+            localization_results = []
+            visibility_results = None
+
+            if question_type == "local":
+                # Stage 1: Question Structural Parsing
+                logger.info("Stage 1: Question Structural Parsing")
+                parsed_question = self._stage_1_parse_question(question, verbose)
+                retrieval_prompt = build_frame_retrieval_prompt(parsed_question)
+            else:
+                logger.info("Stage 1: Question Structural Parsing skipped for global route")
+                retrieval_prompt = question
+
+            # Stage 2: Frame-Level Relevant Frame Retrieval / global frame selection
             logger.info("Stage 2: Frame Retrieval")
-            retrieval_prompt = build_frame_retrieval_prompt(parsed_question)
             retrieval_results = self._stage_2_retrieve_frames(
                 frames, retrieval_prompt, top_k_frames, verbose
             )
             
             if not retrieval_results:
-                logger.warning("No frames retrieved, using first frame as fallback")
+                logger.warning("No frames retrieved")
                 return {
                     "success": False,
                     "answer": "Unable to find relevant frames",
                     "parsed_question": parsed_question,
+                    "question_type": question_type,
                     "retrieval_results": [],
                     "localization_results": [],
                     "visibility_results": None,
                 }
-            
+
+            if question_type == "global":
+                logger.info("Global route: skipping localization and OCR visibility scoring")
+                global_frame = retrieval_results[0]["frame"]
+                answer = self._stage_5_6_reason(question, global_frame, None, verbose)
+
+                logger.info(f"Pipeline completed. Answer: {answer}")
+
+                return {
+                    "success": True,
+                    "answer": answer,
+                    "parsed_question": parsed_question,
+                    "question_type": question_type,
+                    "retrieval_results": retrieval_results,
+                    "localization_results": localization_results,
+                    "visibility_results": visibility_results,
+                    "reasoning_input": {
+                        "global_frame": global_frame,
+                        "local_crop": None,
+                    },
+                }
+
             # Stage 3: Target Region Localization
             logger.info("Stage 3: Region Localization")
             region_prompt = build_region_localization_prompt(parsed_question)
@@ -174,6 +239,7 @@ class EvidenceMiningPipeline:
                 "success": True,
                 "answer": answer,
                 "parsed_question": parsed_question,
+                "question_type": question_type,
                 "retrieval_results": retrieval_results,
                 "localization_results": localization_results,
                 "visibility_results": visibility_results if not localization_results else {
