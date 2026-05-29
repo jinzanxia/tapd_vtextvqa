@@ -1,0 +1,113 @@
+#!/bin/bash
+#SBATCH --job-name=qwen_evidence_mining
+#SBATCH --partition=a100
+#SBATCH --gpus=1
+#SBATCH --nodes=1
+#SBATCH --ntasks-per-node=1
+#SBATCH --mem=80G
+#SBATCH --time=24:00:00
+#SBATCH -o ./logs/qwen_evidence_mining.%N.%j.out
+#SBATCH -e ./logs/qwen_evidence_mining.%N.%j.err
+
+set -euo pipefail
+
+# =========================================================
+# Configuration
+# =========================================================
+IMAGE="docker://xiaojino/sfa:v1.2"
+SCRIPT_PATH="$PWD/infer_with_evidence_pipeline.py"
+
+# Data paths
+DATA_DIR="/mnt/fast/nobackup/scratch4weeks/nc324se/data/M4-ViteVQA"
+GT_JSON="${DATA_DIR}/Annotations/ViteVQA_0.0.2_t1s1val.json"
+VIDEO_DIR="${DATA_DIR}/video"
+VTS_MODEL="${DATA_DIR}/GoMatching_pp_vitaeb_bovtext.pth"
+
+# Model configuration
+MODEL_NAME="Qwen/Qwen2.5-VL-7B-Instruct"
+OUTPUT_JSON="./results/qwen2_5_vl_7b_evidence_mining_val.json"
+
+# Pipeline configuration
+NUM_SAMPLED_FRAMES=16
+TOP_K_FRAMES=5
+
+# Output directories
+mkdir -p ./logs ./results
+
+# =========================================================
+# Container setup
+# =========================================================
+if command -v apptainer >/dev/null 2>&1; then
+    CTR="apptainer"
+elif command -v singularity >/dev/null 2>&1; then
+    CTR="singularity"
+else
+    echo "Neither apptainer nor singularity found."
+    exit 1
+fi
+
+# =========================================================
+# Validation
+# =========================================================
+for path in "${SCRIPT_PATH}" "${GT_JSON}" "${VTS_MODEL}"; do
+    test -f "${path}" || { echo "Missing file: ${path}"; exit 1; }
+done
+
+test -d "${VIDEO_DIR}" || { echo "Missing video dir: ${VIDEO_DIR}"; exit 1; }
+
+# =========================================================
+# Inference with Evidence Mining Pipeline
+# =========================================================
+echo "========================================================="
+echo "Starting VideoQA Inference with Evidence Mining Pipeline"
+echo "========================================================="
+echo "Script: ${SCRIPT_PATH}"
+echo "Model: ${MODEL_NAME}"
+echo "Data: ${GT_JSON}"
+echo "Output: ${OUTPUT_JSON}"
+echo "Sampled Frames: ${NUM_SAMPLED_FRAMES}"
+echo "Top-K Frames: ${TOP_K_FRAMES}"
+echo "========================================================="
+echo ""
+
+${CTR} exec --nv \
+    --bind "${PWD}:${PWD}" \
+    --pwd "${PWD}" \
+    --env TOKENIZERS_PARALLELISM=false \
+    "${IMAGE}" \
+    bash -lc "
+
+echo '===== START EVIDENCE MINING INFERENCE 7B ====='
+echo 'Timestamp:' \$(date)
+echo ''
+
+python ${SCRIPT_PATH} \
+    --gt-json ${GT_JSON} \
+    --video-dir ${VIDEO_DIR} \
+    --model-name ${MODEL_NAME} \
+    --vts-config ./GoMatching/configs/GoMatching_PP_BOVText_vit.yaml \
+    --vts-model ${VTS_MODEL} \
+    --output ${OUTPUT_JSON} \
+    --use-evidence-mining \
+    --num-sampled-frames ${NUM_SAMPLED_FRAMES} \
+    --top-k-frames ${TOP_K_FRAMES} \
+    --verbose
+
+echo ''
+echo '===== INFERENCE COMPLETED ====='
+echo 'Output JSON: ${OUTPUT_JSON}'
+
+"
+
+echo ""
+echo "========================================================="
+echo "Inference finished at $(date)"
+echo "Output JSON: ${OUTPUT_JSON}"
+echo "========================================================="
+
+# Optional: Print results summary
+if [ -f "${OUTPUT_JSON}" ]; then
+    echo ""
+    echo "Result file size: $(du -h ${OUTPUT_JSON} | cut -f1)"
+    echo "Number of predictions: $(python -c "import json; print(len(json.load(open('${OUTPUT_JSON}'))))" 2>/dev/null || echo "N/A")"
+fi

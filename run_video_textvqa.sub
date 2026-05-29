@@ -1,0 +1,186 @@
+#!/bin/bash
+#SBATCH --job-name=qwen_video_textvqa
+#SBATCH --partition=a100
+#SBATCH --gpus=1
+#SBATCH --nodes=1
+#SBATCH --ntasks-per-node=1
+#SBATCH --mem=80G
+#SBATCH --time=24:00:00
+#SBATCH -o ./logs/qwen_video_textvqa.%N.%j.out
+#SBATCH -e ./logs/qwen_video_textvqa.%N.%j.err
+
+set -euo pipefail
+
+# =========================================================
+# Configuration - Modify these for your setup
+# =========================================================
+
+# Inference mode: "evidence" or "baseline"
+# - evidence: Use new hierarchical evidence mining pipeline
+# - baseline: Use SFA baseline single-frame inference
+INFERENCE_MODE="${1:-evidence}"
+
+# Container image
+IMAGE="docker://xiaojino/sfa:v1.2"
+
+# Data configuration
+DATA_DIR="/mnt/fast/nobackup/scratch4weeks/nc324se/data/M4-ViteVQA"
+GT_JSON="${DATA_DIR}/Annotations/ViteVQA_0.0.2_t1s1val.json"
+VIDEO_DIR="${DATA_DIR}/video"
+VTS_MODEL="${DATA_DIR}/GoMatching_pp_vitaeb_bovtext.pth"
+VTS_CONFIG="./GoMatching/configs/GoMatching_PP_BOVText_vit.yaml"
+
+# Model configuration
+MODEL_NAME="Qwen/Qwen2.5-VL-7B-Instruct"
+# ADAPTER_PATH=""  # Uncomment and set if using LoRA
+
+# Inference mode specific configuration
+case "${INFERENCE_MODE}" in
+    evidence)
+        SCRIPT_PATH="$PWD/infer_with_evidence_pipeline.py"
+        OUTPUT_JSON="./results/qwen2_5_vl_7b_evidence_mining_val.json"
+        NUM_SAMPLED_FRAMES=16
+        TOP_K_FRAMES=5
+        MODE_LABEL="Evidence Mining Pipeline"
+        ;;
+    baseline)
+        SCRIPT_PATH="$PWD/infer_codes/qwen.py"
+        OUTPUT_JSON="./results/qwen2_5_vl_7b_baseline_val.json"
+        MODE_LABEL="SFA Baseline"
+        ;;
+    *)
+        echo "Error: Invalid inference mode '${INFERENCE_MODE}'"
+        echo "Usage: sbatch $0 [evidence|baseline]"
+        exit 1
+        ;;
+esac
+
+# Output directories
+mkdir -p ./logs ./results
+
+# =========================================================
+# Container setup and validation
+# =========================================================
+if command -v apptainer >/dev/null 2>&1; then
+    CTR="apptainer"
+elif command -v singularity >/dev/null 2>&1; then
+    CTR="singularity"
+else
+    echo "Error: Neither apptainer nor singularity found"
+    exit 1
+fi
+
+# Validate required files
+for path in "${SCRIPT_PATH}" "${GT_JSON}" "${VTS_MODEL}" "${VTS_CONFIG}"; do
+    if [ ! -f "${path}" ]; then
+        echo "Error: Missing required file: ${path}"
+        exit 1
+    fi
+done
+
+if [ ! -d "${VIDEO_DIR}" ]; then
+    echo "Error: Missing video directory: ${VIDEO_DIR}"
+    exit 1
+fi
+
+# =========================================================
+# Print job information
+# =========================================================
+echo "========================================================="
+echo "VideoQA Inference Job"
+echo "========================================================="
+echo "Mode: ${MODE_LABEL}"
+echo "Inference Mode: ${INFERENCE_MODE}"
+echo "Script: ${SCRIPT_PATH}"
+echo "Model: ${MODEL_NAME}"
+if [ -n "${ADAPTER_PATH:-}" ]; then
+    echo "LoRA Adapter: ${ADAPTER_PATH}"
+fi
+echo "Data: ${GT_JSON}"
+echo "Videos: ${VIDEO_DIR}"
+echo "Output: ${OUTPUT_JSON}"
+if [ "${INFERENCE_MODE}" = "evidence" ]; then
+    echo "Sampled Frames: ${NUM_SAMPLED_FRAMES}"
+    echo "Top-K Frames: ${TOP_K_FRAMES}"
+fi
+echo "Submitted at: $(date)"
+echo "========================================================="
+echo ""
+
+# =========================================================
+# Run inference
+# =========================================================
+${CTR} exec --nv \
+    --bind "${PWD}:${PWD}" \
+    --pwd "${PWD}" \
+    --env TOKENIZERS_PARALLELISM=false \
+    "${IMAGE}" \
+    bash -lc "
+
+echo '===== START INFERENCE ====='
+echo 'Mode: ${MODE_LABEL}'
+echo 'Timestamp: '$(date)
+echo ''
+
+if [ '${INFERENCE_MODE}' = 'evidence' ]; then
+    # Evidence Mining Pipeline
+    python ${SCRIPT_PATH} \
+        --gt-json ${GT_JSON} \
+        --video-dir ${VIDEO_DIR} \
+        --model-name ${MODEL_NAME} \
+        --vts-config ${VTS_CONFIG} \
+        --vts-model ${VTS_MODEL} \
+        --output ${OUTPUT_JSON} \
+        --use-evidence-mining \
+        --num-sampled-frames ${NUM_SAMPLED_FRAMES} \
+        --top-k-frames ${TOP_K_FRAMES}
+elif [ '${INFERENCE_MODE}' = 'baseline' ]; then
+    # SFA Baseline
+    python ${SCRIPT_PATH} \
+        --gt-json ${GT_JSON} \
+        --video-dir ${VIDEO_DIR} \
+        --model-name ${MODEL_NAME} \
+        --vts-config ${VTS_CONFIG} \
+        --vts-model ${VTS_MODEL} \
+        --output ${OUTPUT_JSON} \
+        --no-focus-bonus \
+        --layout-zoom off \
+        --crop-mode fixed \
+        --density-top-k 0 \
+        --density-nms 0.5 \
+        --no-ocr-text \
+        --no-object-detect
+fi
+
+echo ''
+echo '===== INFERENCE COMPLETED ====='
+echo 'Output: ${OUTPUT_JSON}'
+
+"
+
+# =========================================================
+# Post-processing and summary
+# =========================================================
+echo ""
+echo "========================================================="
+echo "Job Completed"
+echo "========================================================="
+echo "Mode: ${MODE_LABEL}"
+echo "Finished at: $(date)"
+echo "Output JSON: ${OUTPUT_JSON}"
+echo "========================================================="
+
+# Print file stats if output exists
+if [ -f "${OUTPUT_JSON}" ]; then
+    FILE_SIZE=$(du -h "${OUTPUT_JSON}" | cut -f1)
+    NUM_PREDS=$(python -c "import json; print(len(json.load(open('${OUTPUT_JSON}'))))" 2>/dev/null || echo "N/A")
+    echo ""
+    echo "Results:"
+    echo "  File size: ${FILE_SIZE}"
+    echo "  Number of predictions: ${NUM_PREDS}"
+    echo ""
+fi
+
+echo "Log files:"
+echo "  Output: ./logs/qwen_video_textvqa.*.${SLURM_JOB_ID}.out"
+echo "  Error:  ./logs/qwen_video_textvqa.*.${SLURM_JOB_ID}.err"

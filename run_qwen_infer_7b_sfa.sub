@@ -59,7 +59,7 @@ python ${SCRIPT_PATH} \
     --vts-model ${VTS_MODEL} \
     --output ${OUTPUT_JSON} \
     --no-focus-bonus \
-    --layout-zoom center \
+    --layout-zoom off \
     --crop-mode fixed \
     --density-top-k 0 \
     --density-nms 0.5 \
