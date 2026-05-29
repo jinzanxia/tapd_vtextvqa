@@ -74,6 +74,7 @@ ${CTR} exec --nv \
     --bind "${PWD}:${PWD}" \
     --pwd "${PWD}" \
     --env TOKENIZERS_PARALLELISM=false \
+    --env PYTHONPATH="${PWD}:${PYTHONPATH:-}" \
     "${IMAGE}" \
     bash -lc "
 

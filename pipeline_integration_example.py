@@ -8,12 +8,8 @@ pipeline into the existing SFA-based VideoQA inference pipeline.
 import sys
 import os
 import json
-import torch
-import cv2
-import numpy as np
 from pathlib import Path
 from typing import List, Dict, Any
-from PIL import Image
 
 # Import the new pipeline components
 from pipeline.evidence_pipeline import EvidenceMiningPipeline, run_pipeline
@@ -62,27 +58,28 @@ class IntegratedVideoQAPipeline:
     
     def _load_model(self, model_path: str, adapter_path: str = None):
         """Load Qwen model with optional LoRA adapter."""
+        import torch
         from transformers import Qwen2_5_VLForConditionalGeneration, AutoProcessor
         try:
             from peft import PeftModel
         except ImportError:
             PeftModel = None
-        
+
         print(f"Loading model from {model_path}")
-        
+
         self.model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
             model_path,
             device_map=self.device,
             torch_dtype=torch.bfloat16,
             attn_implementation="sdpa",
         )
-        
+
         if adapter_path:
             if PeftModel is None:
                 raise ImportError("Loading a LoRA adapter requires the `peft` package.")
             self.model = PeftModel.from_pretrained(self.model, adapter_path)
             self.model.eval()
-        
+
         processor_path = adapter_path if adapter_path else model_path
         try:
             self.processor = AutoProcessor.from_pretrained(processor_path)
@@ -173,7 +170,7 @@ class IntegratedVideoQAPipeline:
         
         return predictions
     
-    def _sample_frames_from_video(self, video_path: str, num_frames: int) -> List[np.ndarray]:
+    def _sample_frames_from_video(self, video_path: str, num_frames: int) -> List[Any]:
         """
         Sample frames from video at regular intervals.
         
@@ -184,6 +181,14 @@ class IntegratedVideoQAPipeline:
         Returns:
             List of sampled frames as numpy arrays
         """
+        try:
+            import cv2
+            import numpy as np
+            from PIL import Image
+        except ImportError as e:
+            print(f"Missing runtime dependency for frame sampling: {e}")
+            return []
+
         try:
             cap = cv2.VideoCapture(video_path)
             total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
@@ -214,12 +219,11 @@ class IntegratedVideoQAPipeline:
             cap.release()
             
             return frames
-        
         except Exception as e:
             print(f"Error sampling frames: {e}")
             return []
     
-    def _simple_inference(self, question: str, frame: np.ndarray) -> str:
+    def _simple_inference(self, question: str, frame: Any) -> str:
         """
         Simple single-frame inference (baseline).
         
@@ -231,10 +235,17 @@ class IntegratedVideoQAPipeline:
             Answer string
         """
         from utils.prompt_builder import build_simple_reasoning_prompt
+        try:
+            import numpy as np
+            from PIL import Image
+            import torch
+        except ImportError as e:
+            print(f"Missing runtime dependency for simple inference: {e}")
+            return "Error generating answer"
         
         try:
             # Convert frame to PIL
-            if frame.dtype != np.uint8:
+            if isinstance(frame, np.ndarray) and frame.dtype != np.uint8:
                 frame = (frame * 255).astype(np.uint8)
             pil_frame = Image.fromarray(frame)
             

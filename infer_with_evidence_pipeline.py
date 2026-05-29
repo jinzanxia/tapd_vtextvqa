@@ -25,6 +25,8 @@ import codecs
 import argparse
 import logging
 import time
+import sys
+import importlib
 from pathlib import Path
 from tqdm import tqdm
 import warnings
@@ -45,12 +47,21 @@ except ImportError:
     PeftModel = None
 
 # Import evidence pipeline
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+PIPELINE_AVAILABLE = False
+IntegratedVideoQAPipeline = None
 try:
-    from pipeline_integration_example import IntegratedVideoQAPipeline
+    pipeline_module = importlib.import_module("pipeline_integration_example")
+    IntegratedVideoQAPipeline = getattr(pipeline_module, "IntegratedVideoQAPipeline")
     PIPELINE_AVAILABLE = True
-except ImportError as e:
-    logger.warning(f"Could not import evidence pipeline: {e}")
-    PIPELINE_AVAILABLE = False
+except Exception as e:
+    logger.warning("Could not import evidence pipeline module.")
+    logger.warning(f"Import error: {type(e).__name__}: {e}")
+    import traceback
+    traceback.print_exc()
 
 # Import metrics
 from metric import anls_metric, stvqa_acc_metric
