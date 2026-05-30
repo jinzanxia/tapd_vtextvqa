@@ -43,7 +43,7 @@ MODEL_NAME="Qwen/Qwen2.5-VL-7B-Instruct"
 case "${INFERENCE_MODE}" in
     evidence)
         SCRIPT_PATH="$PWD/infer_with_evidence_pipeline.py"
-        OUTPUT_JSON="./results/qwen2_5_vl_7b_evidence_mining_val.json"
+        OUTPUT_JSON="./results/qwen2_5_vl_7b_changed_evidence_mining_val.json"
         NUM_SAMPLED_FRAMES=16
         TOP_K_FRAMES=5
         OCR_SCORE_MODE="${OCR_SCORE_MODE:-paddle}"
@@ -52,7 +52,7 @@ case "${INFERENCE_MODE}" in
         ;;
     baseline)
         SCRIPT_PATH="$PWD/infer_codes/qwen.py"
-        OUTPUT_JSON="./results/qwen2_5_vl_7b_baseline_val.json"
+        OUTPUT_JSON="./results/qwen2_5_vl_7b_changed_baseline_val.json"
         MODE_LABEL="SFA Baseline"
         ;;
     *)
