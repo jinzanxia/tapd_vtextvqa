@@ -52,10 +52,10 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 PIPELINE_AVAILABLE = False
-IntegratedVideoQAPipeline = None
+EvidenceMiningPipeline = None
 try:
-    pipeline_module = importlib.import_module("pipeline_integration_example")
-    IntegratedVideoQAPipeline = getattr(pipeline_module, "IntegratedVideoQAPipeline")
+    pipeline_module = importlib.import_module("pipeline.evidence_pipeline")
+    EvidenceMiningPipeline = getattr(pipeline_module, "EvidenceMiningPipeline")
     PIPELINE_AVAILABLE = True
 except Exception as e:
     logger.warning("Could not import evidence pipeline module.")
@@ -247,9 +247,9 @@ def main():
     if args.use_evidence_mining:
         logger.info("Initializing Evidence Mining Pipeline...")
         try:
-            pipeline = IntegratedVideoQAPipeline(
-                model_path=args.model_name,
-                adapter_path=args.adapter_path,
+            pipeline = EvidenceMiningPipeline(
+                model=model,
+                processor=processor,
                 device=device,
                 ocr_score_mode=args.ocr_score_mode
             )
@@ -263,6 +263,8 @@ def main():
     gt_ans = {}
     pred_ans = {}
     total_time = 0
+    route_counts = {"local": 0, "global": 0, "unknown": 0}
+    pipeline_failures = 0
     
     logger.info("Starting inference...")
     logger.info("="*70)
@@ -304,12 +306,17 @@ def main():
                     response = "Failed to process video"
                 else:
                     # Use evidence mining pipeline
-                    result = pipeline.evidence_pipeline.run(
+                    result = pipeline.run(
                         question,
                         frames=frames,
                         top_k_frames=args.top_k_frames,
                         verbose=args.verbose
                     )
+                    route_counts[result.get("question_type", "unknown")] = (
+                        route_counts.get(result.get("question_type", "unknown"), 0) + 1
+                    )
+                    if not result.get("success", False):
+                        pipeline_failures += 1
                     response = result['answer']
             else:
                 # Fallback: use simple baseline (not fully implemented here)
@@ -370,6 +377,9 @@ def main():
     logger.info(f"Total Questions: {len(pred_ans)}")
     logger.info(f"Accuracy: {acc:.4f}")
     logger.info(f"ANLS: {anls:.4f}")
+    if args.use_evidence_mining:
+        logger.info(f"Route Counts: {route_counts}")
+        logger.info(f"Pipeline Failures: {pipeline_failures}")
     logger.info(f"Total Time: {total_time:.2f}s")
     avg_time = total_time / len(pred_ans) if pred_ans else 0.0
     logger.info(f"Avg Time per Question: {avg_time:.2f}s")

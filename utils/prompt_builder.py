@@ -97,9 +97,18 @@ def build_region_localization_prompt(parsed_question: Dict[str, str]) -> str:
     
     # Build localization prompt
     if attribute:
-        localization_prompt = f"Locate the {attribute} {target}."
+        target_description = f"{attribute} {target}"
     else:
-        localization_prompt = f"Locate the {target}."
+        target_description = target
+
+    localization_prompt = f"""Locate the {target_description} in this image.
+
+Return ONLY valid JSON with one bounding box in pixel coordinates:
+{{"box": [x1, y1, x2, y2], "confidence": <float 0-1>}}
+
+If the target is text or appears in a row/table, include nearby text or numbers needed to answer the question.
+
+JSON:"""
     
     return localization_prompt
 

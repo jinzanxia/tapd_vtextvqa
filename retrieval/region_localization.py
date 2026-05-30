@@ -205,7 +205,7 @@ class RegionLocalizer:
                             "y1": float(box[1]),
                             "x2": float(box[2]),
                             "y2": float(box[3]),
-                            "confidence": 0.8,
+                            "confidence": float(data.get("confidence", box[4] if len(box) > 4 else 0.8)),
                         }
                         bboxes.append(bbox)
         except Exception as e:
@@ -227,7 +227,40 @@ class RegionLocalizer:
                 }
                 bboxes.append(bbox)
         
-        return bboxes
+        return [
+            RegionLocalizer._normalize_bbox_coordinates(bbox, frame_size)
+            for bbox in bboxes
+        ]
+
+    @staticmethod
+    def _normalize_bbox_coordinates(bbox: Dict[str, Any],
+                                    frame_size: Tuple[int, int]) -> Dict[str, Any]:
+        """Convert normalized boxes to pixels and clamp to image bounds."""
+        w, h = frame_size
+        x1 = float(bbox["x1"])
+        y1 = float(bbox["y1"])
+        x2 = float(bbox["x2"])
+        y2 = float(bbox["y2"])
+
+        if max(abs(x1), abs(y1), abs(x2), abs(y2)) <= 1.5:
+            x1 *= w
+            x2 *= w
+            y1 *= h
+            y2 *= h
+
+        x1, x2 = sorted((max(0.0, min(float(w), x1)), max(0.0, min(float(w), x2))))
+        y1, y2 = sorted((max(0.0, min(float(h), y1)), max(0.0, min(float(h), y2))))
+
+        if x2 <= x1 or y2 <= y1:
+            return RegionLocalizer._get_center_crop_bbox(frame_size)
+
+        return {
+            "x1": x1,
+            "y1": y1,
+            "x2": x2,
+            "y2": y2,
+            "confidence": max(0.0, min(1.0, float(bbox.get("confidence", 0.5)))),
+        }
     
     @staticmethod
     def _get_center_crop_bbox(frame_size: Tuple[int, int],

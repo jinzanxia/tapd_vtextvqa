@@ -234,17 +234,20 @@ class FrameRetriever:
                 json_str = response[start_idx:end_idx]
                 data = json.loads(json_str)
                 
-                # Extract confidence
+                # Convert yes/no confidence into relevance probability.
                 if "confidence" in data:
-                    return float(data["confidence"])
+                    confidence = FrameRetriever._clamp_score(data["confidence"])
                 elif "score" in data:
-                    return float(data["score"])
+                    confidence = FrameRetriever._clamp_score(data["score"])
                 else:
-                    # Default score based on yes/no
-                    if data.get("answer", "").lower() == "yes":
-                        return 0.8
-                    else:
-                        return 0.2
+                    confidence = 0.8
+
+                answer = str(data.get("answer", "")).lower()
+                if answer.startswith("yes"):
+                    return confidence
+                if answer.startswith("no"):
+                    return 1.0 - confidence
+                return confidence
             else:
                 # Fallback: parse text for yes/no
                 if "yes" in response.lower():
@@ -253,6 +256,13 @@ class FrameRetriever:
                     return 0.3
         except Exception as e:
             logger.debug(f"Error extracting score from response: {e}")
+            return 0.5
+
+    @staticmethod
+    def _clamp_score(value: Any) -> float:
+        try:
+            return max(0.0, min(1.0, float(value)))
+        except (TypeError, ValueError):
             return 0.5
 
 

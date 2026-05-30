@@ -136,6 +136,11 @@ export FLAGS_use_pir_api=0
 export FLAGS_enable_onednn=0
 
 if [ '${INFERENCE_MODE}' = 'evidence' ]; then
+    ADAPTER_ARGS=()
+    if [ -n '${ADAPTER_PATH:-}' ]; then
+        ADAPTER_ARGS=(--adapter-path '${ADAPTER_PATH}')
+    fi
+
     if [ '${INSTALL_PADDLEOCR}' = '1' ]; then
         python -c 'import paddleocr' >/dev/null 2>&1 || \
             python -m pip install --user --no-cache-dir paddlepaddle paddleocr || \
@@ -147,6 +152,7 @@ if [ '${INFERENCE_MODE}' = 'evidence' ]; then
         --gt-json ${GT_JSON} \
         --video-dir ${VIDEO_DIR} \
         --model-name ${MODEL_NAME} \
+        \"\${ADAPTER_ARGS[@]}\" \
         --vts-config ${VTS_CONFIG} \
         --vts-model ${VTS_MODEL} \
         --output ${OUTPUT_JSON} \
@@ -155,11 +161,17 @@ if [ '${INFERENCE_MODE}' = 'evidence' ]; then
         --top-k-frames ${TOP_K_FRAMES} \
         --ocr-score-mode ${OCR_SCORE_MODE}
 elif [ '${INFERENCE_MODE}' = 'baseline' ]; then
+    ADAPTER_ARGS=()
+    if [ -n '${ADAPTER_PATH:-}' ]; then
+        ADAPTER_ARGS=(--adapter-path '${ADAPTER_PATH}')
+    fi
+
     # SFA Baseline
     python ${SCRIPT_PATH} \
         --gt-json ${GT_JSON} \
         --video-dir ${VIDEO_DIR} \
         --model-name ${MODEL_NAME} \
+        \"\${ADAPTER_ARGS[@]}\" \
         --vts-config ${VTS_CONFIG} \
         --vts-model ${VTS_MODEL} \
         --output ${OUTPUT_JSON} \
