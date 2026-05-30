@@ -47,6 +47,7 @@ case "${INFERENCE_MODE}" in
         NUM_SAMPLED_FRAMES=16
         TOP_K_FRAMES=5
         OCR_SCORE_MODE="${OCR_SCORE_MODE:-paddle}"
+        GLOBAL_ROUTE="${GLOBAL_ROUTE:-sfa}"
         MODE_LABEL="Evidence Mining Pipeline"
         ;;
     baseline)
@@ -109,6 +110,7 @@ if [ "${INFERENCE_MODE}" = "evidence" ]; then
     echo "Sampled Frames: ${NUM_SAMPLED_FRAMES}"
     echo "Top-K Frames: ${TOP_K_FRAMES}"
     echo "OCR Score Mode: ${OCR_SCORE_MODE}"
+    echo "Global Route: ${GLOBAL_ROUTE}"
     echo "Install PaddleOCR: ${INSTALL_PADDLEOCR}"
 fi
 echo "Submitted at: $(date)"
@@ -159,7 +161,8 @@ if [ '${INFERENCE_MODE}' = 'evidence' ]; then
         --use-evidence-mining \
         --num-sampled-frames ${NUM_SAMPLED_FRAMES} \
         --top-k-frames ${TOP_K_FRAMES} \
-        --ocr-score-mode ${OCR_SCORE_MODE}
+        --ocr-score-mode ${OCR_SCORE_MODE} \
+        --global-route ${GLOBAL_ROUTE}
 elif [ '${INFERENCE_MODE}' = 'baseline' ]; then
     ADAPTER_ARGS=()
     if [ -n '${ADAPTER_PATH:-}' ]; then

@@ -50,18 +50,31 @@ except ImportError:
 SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
+INFER_CODES_DIR = SCRIPT_DIR / "infer_codes"
+if str(INFER_CODES_DIR) not in sys.path:
+    sys.path.insert(0, str(INFER_CODES_DIR))
 
 PIPELINE_AVAILABLE = False
 EvidenceMiningPipeline = None
+route_question = None
 try:
     pipeline_module = importlib.import_module("pipeline.evidence_pipeline")
     EvidenceMiningPipeline = getattr(pipeline_module, "EvidenceMiningPipeline")
+    route_question = getattr(pipeline_module, "route_question")
     PIPELINE_AVAILABLE = True
 except Exception as e:
     logger.warning("Could not import evidence pipeline module.")
     logger.warning(f"Import error: {type(e).__name__}: {e}")
     import traceback
     traceback.print_exc()
+
+try:
+    from qwen_vison_process import process_vision_info, init_ocrmodel, set_key_conf
+except Exception as e:
+    process_vision_info = None
+    init_ocrmodel = None
+    set_key_conf = None
+    logger.warning(f"Could not import SFA vision pipeline: {type(e).__name__}: {e}")
 
 # Import metrics
 from metric import anls_metric, stvqa_acc_metric
@@ -115,6 +128,66 @@ def sample_frames_from_video(video_path, num_frames):
         cap.release()
 
 
+def run_sfa_global_reasoning(question, video_path, model, processor):
+    """Run the original SFA fixed-crop video route for global questions."""
+    if process_vision_info is None:
+        raise RuntimeError("SFA vision pipeline is not available")
+
+    prompt = 'Please provide a brief answer based on the video, using as few words as possible. Question: ' + question
+    conversation = [
+        {"role": "system", "content": "You are a helpful assistant."},
+        {
+            "role": "user",
+            "content": [
+                {"type": "video", "video": video_path, "fps": 1.0},
+                {"type": "text", "text": prompt},
+            ]
+        },
+    ]
+
+    image_inputs, video_inputs, video_kwargs, _ = process_vision_info(
+        question,
+        conversation,
+        return_video_kwargs=True,
+        d2_predictor=None,
+        d2_class_ids=None,
+    )
+
+    text = processor.apply_chat_template(
+        conversation,
+        tokenize=False,
+        add_generation_prompt=True
+    )
+    inputs = processor(
+        text=[text],
+        images=image_inputs,
+        videos=video_inputs,
+        padding=True,
+        return_tensors="pt",
+        **video_kwargs,
+    )
+    inputs = inputs.to(model.device)
+
+    with torch.no_grad():
+        output_ids = model.generate(
+            **inputs,
+            max_new_tokens=128,
+            do_sample=False,
+            temperature=0,
+            num_beams=1,
+        )
+
+    generated_ids_trimmed = [
+        out_ids[len(in_ids):]
+        for in_ids, out_ids in zip(inputs.input_ids, output_ids)
+    ]
+    return processor.batch_decode(
+        generated_ids_trimmed,
+        skip_special_tokens=True,
+        clean_up_tokenization_spaces=False
+    )[0].strip()
+
+
 def get_parser():
     """Create argument parser."""
     parser = argparse.ArgumentParser(
@@ -164,6 +237,12 @@ def get_parser():
         default="paddle",
         help="OCR readability scoring backend for local evidence crops (default: paddle)"
     )
+    parser.add_argument(
+        "--global-route",
+        choices=["sfa", "evidence"],
+        default="sfa",
+        help="Route global questions to original SFA video inference or evidence top-frame inference (default: sfa)"
+    )
     
     # Compatibility arguments (for baseline modes)
     parser.add_argument("--no-ocr-text", action="store_true", default=False)
@@ -202,6 +281,7 @@ def main():
     logger.info(f"Input: {args.gt_json}")
     logger.info(f"Output: {args.output}")
     logger.info(f"Videos: {args.video_dir}")
+    logger.info(f"Global Route: {args.global_route}")
     logger.info("")
     
     # Setup device
@@ -258,6 +338,29 @@ def main():
             logger.error(f"Failed to initialize pipeline: {e}")
             logger.warning("Falling back to baseline mode")
             args.use_evidence_mining = False
+
+    if args.use_evidence_mining and args.global_route == "sfa":
+        if init_ocrmodel is None or set_key_conf is None:
+            logger.error("SFA global route requested but SFA modules are unavailable")
+            return
+        logger.info("Initializing SFA global route...")
+        set_key_conf(
+            w_size=0.6,
+            thrd=0.7,
+            focus_bonus=False,
+            layout_zoom="off",
+            crop_mode="fixed",
+            density_top_k=0,
+            density_nms=0.5,
+        )
+        init_ocrmodel(
+            cfg_path=args.vts_config,
+            model_path=args.vts_model,
+            device=device,
+            model=model,
+            processor=processor,
+        )
+        logger.info("SFA global route initialized\n")
     
     # Process all QAs
     gt_ans = {}
@@ -300,24 +403,38 @@ def main():
         start_time = time.time()
         try:
             if args.use_evidence_mining:
-                frames = sample_frames_from_video(video_path, args.num_sampled_frames)
-                if not frames:
-                    logger.error(f"Skipping QA {qid}: failed to sample frames from {video_path}")
-                    response = "Failed to process video"
-                else:
-                    # Use evidence mining pipeline
-                    result = pipeline.run(
+                question_type = route_question(question) if route_question else "local"
+                route_counts[question_type] = route_counts.get(question_type, 0) + 1
+
+                if question_type == "global" and args.global_route == "sfa":
+                    response = run_sfa_global_reasoning(
                         question,
-                        frames=frames,
-                        top_k_frames=args.top_k_frames,
-                        verbose=args.verbose
+                        video_path,
+                        model=model,
+                        processor=processor,
                     )
-                    route_counts[result.get("question_type", "unknown")] = (
-                        route_counts.get(result.get("question_type", "unknown"), 0) + 1
-                    )
-                    if not result.get("success", False):
+                else:
+                    frames = sample_frames_from_video(video_path, args.num_sampled_frames)
+                    if not frames:
+                        logger.error(f"Skipping QA {qid}: failed to sample frames from {video_path}")
+                        response = "Failed to process video"
                         pipeline_failures += 1
-                    response = result['answer']
+                        result = None
+                    else:
+                        result = pipeline.run(
+                            question,
+                            frames=frames,
+                            top_k_frames=args.top_k_frames,
+                            verbose=args.verbose
+                        )
+
+                    if result is None:
+                        pass
+                    elif not result.get("success", False):
+                        pipeline_failures += 1
+                        response = result['answer']
+                    else:
+                        response = result['answer']
             else:
                 # Fallback: use simple baseline (not fully implemented here)
                 logger.warning("Baseline mode not fully implemented in this script")
