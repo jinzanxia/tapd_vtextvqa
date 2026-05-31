@@ -37,7 +37,9 @@ VTS_CONFIG="./GoMatching/configs/GoMatching_PP_BOVText_vit.yaml"
 
 # Model configuration
 MODEL_NAME="Qwen/Qwen2.5-VL-7B-Instruct"
-# ADAPTER_PATH=""  # Uncomment and set if using LoRA
+# ADAPTER_PATH can be set in the environment before submitting the job.
+# Provide a safe default to avoid 'unbound variable' when 'set -u' is enabled.
+ADAPTER_PATH="${ADAPTER_PATH:-}"
 
 # Inference mode specific configuration
 case "${INFERENCE_MODE}" in
