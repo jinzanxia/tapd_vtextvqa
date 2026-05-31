@@ -178,26 +178,23 @@ def build_final_reasoning_prompt(original_question: str, context: str = "") -> s
     Returns:
         Final reasoning prompt for Qwen2.5-VL
     """
+    # Match SFA baseline wording: request a very brief answer using as few words as possible.
     if context:
         prompt = f"""{context}
 
 Image 1: Full scene context (global view)
 Image 2: Zoomed-in crop of the relevant target region (local evidence)
 
-Please answer the following question based on both images:
-
-{original_question}
-
-Provide a concise, accurate answer."""
+Please provide a brief answer based on the images, using as few words as possible.
+Question: {original_question}
+"""
     else:
         prompt = f"""Image 1: Full scene context (global view)
 Image 2: Zoomed-in crop of the relevant target region (local evidence)
 
-Please answer the following question based on both images:
-
-{original_question}
-
-Provide a concise, accurate answer."""
+Please provide a brief answer based on the images, using as few words as possible.
+Question: {original_question}
+"""
     
     return prompt
 
@@ -212,9 +209,8 @@ def build_simple_reasoning_prompt(question: str) -> str:
     Returns:
         Simple reasoning prompt
     """
-    prompt = f"""Please answer the following question based on the image:
-
-{question}
-
-Provide a concise, accurate answer."""
+    # Align with baseline: request a very brief answer
+    prompt = f"""Please provide a brief answer based on the image, using as few words as possible.
+Question: {question}
+"""
     return prompt
