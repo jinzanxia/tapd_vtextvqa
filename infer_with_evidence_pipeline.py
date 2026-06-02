@@ -243,6 +243,12 @@ def get_parser():
         default="sfa",
         help="Route global questions to original SFA video inference or evidence top-frame inference (default: sfa)"
     )
+    parser.add_argument(
+        "--reasoning-evidence-mode",
+        choices=["both", "global", "local"],
+        default="both",
+        help="Final local-route reasoning evidence: both images, global frame only, or local crop only (default: both)"
+    )
     
     # Compatibility arguments (for baseline modes)
     parser.add_argument("--no-ocr-text", action="store_true", default=False)
@@ -331,7 +337,8 @@ def main():
                 model=model,
                 processor=processor,
                 device=device,
-                ocr_score_mode=args.ocr_score_mode
+                ocr_score_mode=args.ocr_score_mode,
+                reasoning_evidence_mode=args.reasoning_evidence_mode
             )
             logger.info("Pipeline initialized\n")
         except Exception as e:

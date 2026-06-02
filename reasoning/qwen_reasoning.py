@@ -101,6 +101,89 @@ class QwenReasoner:
         
         try:
             # Build conversation with two images
+            prompt = 'Please provide a brief answer based on the images, using as few words as possible. Question: ' + question
+            conversation = [
+                {"role": "system", "content": "You are a helpful assistant."},
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "image"},
+                        {"type": "image"},
+                        {"type": "text", "text": prompt},
+                    ]
+                },
+            ]
+            
+            text = self.processor.apply_chat_template(
+                conversation,
+                tokenize=False,
+                add_generation_prompt=True
+            )
+
+            global_frame = self._ensure_min_vlm_size(global_frame)
+            local_crop = self._ensure_min_vlm_size(local_crop)
+            
+            inputs = self.processor(
+                text=[text],
+                images=[global_frame, local_crop],
+                padding=True,
+                return_tensors="pt",
+            )
+            inputs = inputs.to(self.model.device)
+            
+            # Generate response
+            with torch.no_grad():
+                output_ids = self.model.generate(
+                    **inputs,
+                    max_new_tokens=128,
+                    do_sample=False,
+                    temperature=0,
+                    num_beams=1,
+                )
+            
+            # Decode response
+            generated_ids_trimmed = [
+                out_ids[len(in_ids):] 
+                for in_ids, out_ids in zip(inputs.input_ids, output_ids)
+            ]
+            response = self.processor.batch_decode(
+                generated_ids_trimmed,
+                skip_special_tokens=True,
+                clean_up_tokenization_spaces=False
+            )[0].strip()
+            
+            # Clean up response
+            #response = self._clean_response(response)
+            
+            return response
+            
+        except Exception as e:
+            logger.error(f"Error reasoning with both evidence: {e}")
+            return f"Unable to process: {str(e)}"
+        
+    def _reason_with_both_evidence_bak(self,
+                                   question: str,
+                                   global_frame: Image.Image,
+                                   local_crop: Image.Image,
+                                   context: str = "") -> str:
+        """
+        Generate answer using both global and local evidence.
+        
+        Args:
+            question: The QA question
+            global_frame: Full scene image
+            local_crop: Target region crop
+            context: Additional context
+            
+        Returns:
+            Generated answer
+        """
+        from utils.prompt_builder import build_final_reasoning_prompt
+        
+        prompt = build_final_reasoning_prompt(question, context)
+        
+        try:
+            # Build conversation with two images
             conversation = [
                 {"role": "system", "content": "You are a helpful assistant for question answering."},
                 {
@@ -159,7 +242,7 @@ class QwenReasoner:
         except Exception as e:
             logger.error(f"Error reasoning with both evidence: {e}")
             return f"Unable to process: {str(e)}"
-    
+            
     def _reason_with_single_image(self,
                                   question: str,
                                   image: Image.Image,
@@ -232,7 +315,7 @@ class QwenReasoner:
             )[0].strip()
             
             # Clean up response
-            response = self._clean_response(response)
+            #response = self._clean_response(response)
             
             return response
             

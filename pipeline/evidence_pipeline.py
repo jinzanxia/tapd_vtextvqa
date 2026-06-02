@@ -75,7 +75,8 @@ class EvidenceMiningPipeline:
                  model: Optional[Qwen2_5_VLForConditionalGeneration] = None,
                  processor: Optional[AutoProcessor] = None,
                  device: str = "cuda:0",
-                 ocr_score_mode: str = "paddle"):
+                 ocr_score_mode: str = "paddle",
+                 reasoning_evidence_mode: str = "both"):
         """
         Initialize the evidence mining pipeline.
         
@@ -84,11 +85,16 @@ class EvidenceMiningPipeline:
             processor: AutoProcessor instance. If None, loads default processor.
             device: Device to run on (default: cuda:0)
             ocr_score_mode: "paddle" or "vlm" for OCR readability scoring
+            reasoning_evidence_mode: "both", "global", or "local" for final reasoning
         """
         self.model = model
         self.processor = processor
         self.device = device
         self.ocr_score_mode = ocr_score_mode
+        if reasoning_evidence_mode not in {"both", "global", "local"}:
+            logger.warning(f"Unknown reasoning evidence mode '{reasoning_evidence_mode}', using both")
+            reasoning_evidence_mode = "both"
+        self.reasoning_evidence_mode = reasoning_evidence_mode
         
         # Load model if not provided
         if self.model is None or self.processor is None:
@@ -201,6 +207,7 @@ class EvidenceMiningPipeline:
                     "localization_results": localization_results,
                     "visibility_results": visibility_results,
                     "reasoning_input": {
+                        "mode": "global",
                         "global_frame": global_frame,
                         "local_crop": None,
                     },
@@ -236,7 +243,17 @@ class EvidenceMiningPipeline:
             
             # Stage 5 & 6: Evidence Fusion + Final Reasoning
             logger.info("Stage 5-6: Evidence Fusion and VLM Reasoning")
-            answer = self._stage_5_6_reason(question, global_frame, local_crop, parsed_question, verbose)
+            reasoning_global_frame, reasoning_local_crop, actual_reasoning_mode = self._select_reasoning_evidence(
+                global_frame,
+                local_crop,
+            )
+            answer = self._stage_5_6_reason(
+                question,
+                reasoning_global_frame,
+                reasoning_local_crop,
+                parsed_question,
+                verbose,
+            )
 
             logger.info(f"Pipeline completed. Answer: {answer}")
             
@@ -252,8 +269,9 @@ class EvidenceMiningPipeline:
                     "scores": visibility_results,
                 },
                 "reasoning_input": {
-                    "global_frame": global_frame,
-                    "local_crop": local_crop,
+                    "mode": actual_reasoning_mode,
+                    "global_frame": reasoning_global_frame,
+                    "local_crop": reasoning_local_crop,
                 },
             }
             
@@ -371,6 +389,21 @@ class EvidenceMiningPipeline:
 
         return answer_post
 
+    def _select_reasoning_evidence(self,
+                                   global_frame: Optional[Image.Image],
+                                   local_crop: Optional[Image.Image]):
+        """Select final reasoning evidence according to configured ablation mode."""
+        if self.reasoning_evidence_mode == "global":
+            return global_frame, None, "global"
+
+        if self.reasoning_evidence_mode == "local":
+            if local_crop is not None:
+                return None, local_crop, "local"
+            logger.warning("Local-only reasoning requested but local crop is missing; falling back to global")
+            return global_frame, None, "global_fallback"
+
+        return global_frame, local_crop, "both" if local_crop is not None else "global_fallback"
+
     def _postprocess_answer(self, answer: str, parsed_question: Optional[Dict[str, Any]], local_crop: Optional[Image.Image]) -> str:
         """
         Heuristic post-processing to convert verbose VLM answers into concise expected answers.
@@ -473,6 +506,7 @@ def run_pipeline(question: str,
                 device: str = "cuda:0",
                 top_k_frames: int = 5,
                 ocr_score_mode: str = "paddle",
+                reasoning_evidence_mode: str = "both",
                 verbose: bool = False) -> Dict[str, Any]:
     """
     Run the evidence mining pipeline.
@@ -485,6 +519,7 @@ def run_pipeline(question: str,
         device: Device to run on
         top_k_frames: Number of top frames to retrieve
         ocr_score_mode: "paddle" or "vlm" for OCR readability scoring
+        reasoning_evidence_mode: "both", "global", or "local" for final reasoning
         verbose: Print debug information
         
     Returns:
@@ -494,6 +529,7 @@ def run_pipeline(question: str,
         model=model,
         processor=processor,
         device=device,
-        ocr_score_mode=ocr_score_mode
+        ocr_score_mode=ocr_score_mode,
+        reasoning_evidence_mode=reasoning_evidence_mode
     )
     return pipeline.run(question, frames, top_k_frames, verbose)
