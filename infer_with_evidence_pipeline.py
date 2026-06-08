@@ -249,6 +249,18 @@ def get_parser():
         default="both",
         help="Final local-route reasoning evidence: both images, global frame only, or local crop only (default: both)"
     )
+    parser.add_argument(
+        "--num-reasoning-global-frames",
+        type=int,
+        default=3,
+        help="Number of retrieved global frames passed to final reasoning (default: 3)"
+    )
+    parser.add_argument(
+        "--num-reasoning-local-crops",
+        type=int,
+        default=3,
+        help="Number of ranked local crops passed to final reasoning (default: 3)"
+    )
     
     # Compatibility arguments (for baseline modes)
     parser.add_argument("--no-ocr-text", action="store_true", default=False)
@@ -338,7 +350,9 @@ def main():
                 processor=processor,
                 device=device,
                 ocr_score_mode=args.ocr_score_mode,
-                reasoning_evidence_mode=args.reasoning_evidence_mode
+                reasoning_evidence_mode=args.reasoning_evidence_mode,
+                reasoning_global_frame_count=args.num_reasoning_global_frames,
+                reasoning_local_crop_count=args.num_reasoning_local_crops
             )
             logger.info("Pipeline initialized\n")
         except Exception as e:
@@ -432,6 +446,8 @@ def main():
                             question,
                             frames=frames,
                             top_k_frames=args.top_k_frames,
+                            reasoning_global_frame_count=args.num_reasoning_global_frames,
+                            reasoning_local_crop_count=args.num_reasoning_local_crops,
                             verbose=args.verbose
                         )
 

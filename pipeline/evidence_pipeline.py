@@ -76,7 +76,9 @@ class EvidenceMiningPipeline:
                  processor: Optional[AutoProcessor] = None,
                  device: str = "cuda:0",
                  ocr_score_mode: str = "paddle",
-                 reasoning_evidence_mode: str = "both"):
+                 reasoning_evidence_mode: str = "both",
+                 reasoning_global_frame_count: int = 3,
+                 reasoning_local_crop_count: int = 3):
         """
         Initialize the evidence mining pipeline.
         
@@ -86,6 +88,8 @@ class EvidenceMiningPipeline:
             device: Device to run on (default: cuda:0)
             ocr_score_mode: "paddle" or "vlm" for OCR readability scoring
             reasoning_evidence_mode: "both", "global", or "local" for final reasoning
+            reasoning_global_frame_count: Number of retrieved global frames to pass to final reasoning
+            reasoning_local_crop_count: Number of ranked local crops to pass to final reasoning
         """
         self.model = model
         self.processor = processor
@@ -95,6 +99,8 @@ class EvidenceMiningPipeline:
             logger.warning(f"Unknown reasoning evidence mode '{reasoning_evidence_mode}', using both")
             reasoning_evidence_mode = "both"
         self.reasoning_evidence_mode = reasoning_evidence_mode
+        self.reasoning_global_frame_count = max(1, int(reasoning_global_frame_count))
+        self.reasoning_local_crop_count = max(1, int(reasoning_local_crop_count))
         
         # Load model if not provided
         if self.model is None or self.processor is None:
@@ -122,7 +128,9 @@ class EvidenceMiningPipeline:
             question: str,
             frames: List[Union[np.ndarray, Image.Image]],
             top_k_frames: int = 5,
-            verbose: bool = False) -> Dict[str, Any]:
+            verbose: bool = False,
+            reasoning_global_frame_count: Optional[int] = None,
+            reasoning_local_crop_count: Optional[int] = None) -> Dict[str, Any]:
         """
         Run the full evidence mining pipeline.
         
@@ -130,6 +138,8 @@ class EvidenceMiningPipeline:
             question: The video QA question
             frames: List of video frames (numpy arrays or PIL Images)
             top_k_frames: Number of top frames to retrieve (default: 5)
+            reasoning_global_frame_count: Override number of global frames for final reasoning
+            reasoning_local_crop_count: Override number of local crops for final reasoning
             verbose: Print debug information (default: False)
             
         Returns:
@@ -146,6 +156,14 @@ class EvidenceMiningPipeline:
             logger.info(f"Starting evidence mining pipeline for question: {question}")
             question_type = route_question(question)
             logger.info(f"Question Type Routing: {question_type}")
+            reasoning_global_frame_count = max(
+                1,
+                int(reasoning_global_frame_count or self.reasoning_global_frame_count),
+            )
+            reasoning_local_crop_count = max(
+                1,
+                int(reasoning_local_crop_count or self.reasoning_local_crop_count),
+            )
 
             if not frames:
                 logger.warning("No input frames provided to evidence mining pipeline")
@@ -193,8 +211,8 @@ class EvidenceMiningPipeline:
 
             if question_type == "global":
                 logger.info("Global route: skipping localization and OCR visibility scoring")
-                global_frame = retrieval_results[0]["frame"]
-                answer = self._stage_5_6_reason(question, global_frame, None, parsed_question, verbose)
+                global_frames = self._select_top_frames(retrieval_results, reasoning_global_frame_count)
+                answer = self._stage_5_6_reason(question, global_frames, [], parsed_question, verbose)
 
                 logger.info(f"Pipeline completed. Answer: {answer}")
 
@@ -208,7 +226,9 @@ class EvidenceMiningPipeline:
                     "visibility_results": visibility_results,
                     "reasoning_input": {
                         "mode": "global",
-                        "global_frame": global_frame,
+                        "global_frames": global_frames,
+                        "local_crops": [],
+                        "global_frame": global_frames[0] if global_frames else None,
                         "local_crop": None,
                     },
                 }
@@ -222,8 +242,8 @@ class EvidenceMiningPipeline:
             
             if not localization_results:
                 logger.warning("No regions localized, using full frame")
-                global_frame = retrieval_results[0]["frame"]
-                local_crop = None
+                global_frames = self._select_top_frames(retrieval_results, reasoning_global_frame_count)
+                local_crops = []
             else:
                 # Stage 4: OCR Visibility Scoring
                 logger.info("Stage 4: Candidate Crop Scoring")
@@ -234,23 +254,23 @@ class EvidenceMiningPipeline:
                 )
                 
                 if visibility_results["success"]:
-                    global_frame = retrieval_results[0]["frame"]
-                    local_crop = visibility_results["best_crop"]
+                    global_frames = self._select_top_frames(retrieval_results, reasoning_global_frame_count)
+                    local_crops = self._select_top_crops(visibility_results, reasoning_local_crop_count)
                 else:
-                    global_frame = retrieval_results[0]["frame"]
-                    local_crop = None
+                    global_frames = self._select_top_frames(retrieval_results, reasoning_global_frame_count)
+                    local_crops = []
                     visibility_results = None
             
             # Stage 5 & 6: Evidence Fusion + Final Reasoning
             logger.info("Stage 5-6: Evidence Fusion and VLM Reasoning")
-            reasoning_global_frame, reasoning_local_crop, actual_reasoning_mode = self._select_reasoning_evidence(
-                global_frame,
-                local_crop,
+            reasoning_global_frames, reasoning_local_crops, actual_reasoning_mode = self._select_reasoning_evidence(
+                global_frames,
+                local_crops,
             )
             answer = self._stage_5_6_reason(
                 question,
-                reasoning_global_frame,
-                reasoning_local_crop,
+                reasoning_global_frames,
+                reasoning_local_crops,
                 parsed_question,
                 verbose,
             )
@@ -265,13 +285,16 @@ class EvidenceMiningPipeline:
                 "retrieval_results": retrieval_results,
                 "localization_results": localization_results,
                 "visibility_results": visibility_results if not localization_results else {
-                    "best_crop": local_crop,
+                    "best_crop": local_crops[0] if local_crops else None,
+                    "top_crops": local_crops,
                     "scores": visibility_results,
                 },
                 "reasoning_input": {
                     "mode": actual_reasoning_mode,
-                    "global_frame": reasoning_global_frame,
-                    "local_crop": reasoning_local_crop,
+                    "global_frames": reasoning_global_frames,
+                    "local_crops": reasoning_local_crops,
+                    "global_frame": reasoning_global_frames[0] if reasoning_global_frames else None,
+                    "local_crop": reasoning_local_crops[0] if reasoning_local_crops else None,
                 },
             }
             
@@ -368,8 +391,8 @@ class EvidenceMiningPipeline:
     
     def _stage_5_6_reason(self,
                          question: str,
-                         global_frame: Image.Image,
-                         local_crop: Optional[Image.Image] = None,
+                         global_frame: Union[Image.Image, List[Image.Image], None],
+                         local_crop: Union[Image.Image, List[Image.Image], None] = None,
                          parsed_question: Optional[Dict[str, Any]] = None,
                          verbose: bool = False) -> str:
         """Stage 5-6: Fuse evidence and generate final answer."""
@@ -390,21 +413,38 @@ class EvidenceMiningPipeline:
         return answer_post
 
     def _select_reasoning_evidence(self,
-                                   global_frame: Optional[Image.Image],
-                                   local_crop: Optional[Image.Image]):
+                                   global_frames: List[Image.Image],
+                                   local_crops: List[Image.Image]):
         """Select final reasoning evidence according to configured ablation mode."""
         if self.reasoning_evidence_mode == "global":
-            return global_frame, None, "global"
+            return global_frames, [], "global"
 
         if self.reasoning_evidence_mode == "local":
-            if local_crop is not None:
-                return None, local_crop, "local"
+            if local_crops:
+                return [], local_crops, "local"
             logger.warning("Local-only reasoning requested but local crop is missing; falling back to global")
-            return global_frame, None, "global_fallback"
+            return global_frames, [], "global_fallback"
 
-        return global_frame, local_crop, "both" if local_crop is not None else "global_fallback"
+        return global_frames, local_crops, "both" if local_crops else "global_fallback"
 
-    def _postprocess_answer(self, answer: str, parsed_question: Optional[Dict[str, Any]], local_crop: Optional[Image.Image]) -> str:
+    @staticmethod
+    def _select_top_frames(retrieval_results: List[Dict[str, Any]], count: int) -> List[Image.Image]:
+        """Return top retrieved frames for final reasoning."""
+        return [item["frame"] for item in retrieval_results[:max(1, count)] if item.get("frame") is not None]
+
+    @staticmethod
+    def _select_top_crops(visibility_results: Dict[str, Any], count: int) -> List[Image.Image]:
+        """Return top ranked crops from visibility scoring output."""
+        scores = visibility_results.get("scores") or []
+        crops = [item["crop"] for item in scores[:max(1, count)] if item.get("crop") is not None]
+        if not crops and visibility_results.get("best_crop") is not None:
+            crops = [visibility_results["best_crop"]]
+        return crops
+
+    def _postprocess_answer(self,
+                            answer: str,
+                            parsed_question: Optional[Dict[str, Any]],
+                            local_crop: Union[Image.Image, List[Image.Image], None]) -> str:
         """
         Heuristic post-processing to convert verbose VLM answers into concise expected answers.
 
@@ -415,6 +455,7 @@ class EvidenceMiningPipeline:
         """
         import re
         ans = (answer or "").strip()
+        local_crops = local_crop if isinstance(local_crop, list) else ([local_crop] if local_crop is not None else [])
         task = None
         if parsed_question and isinstance(parsed_question, dict):
             task = parsed_question.get('task')
@@ -439,12 +480,12 @@ class EvidenceMiningPipeline:
                 return m.group(0)
 
             # 4) If we have a crop, try PaddleOCR as a fallback
-            if local_crop is not None:
+            for crop in local_crops:
                 try:
                     ocr_model = OCRVisibilityScorer._get_shared_ocr_model()
                     if ocr_model is not None:
                         import numpy as np
-                        crop_np = np.array(local_crop)
+                        crop_np = np.array(crop)
                         results = ocr_model.ocr(crop_np, cls=True)
                         if results and results[0]:
                             texts = [r[1][0] for r in results[0] if r and len(r) > 1]
@@ -477,12 +518,12 @@ class EvidenceMiningPipeline:
                 return m.group(0)
 
             # PaddleOCR fallback on crop
-            if local_crop is not None:
+            for crop in local_crops:
                 try:
                     ocr_model = OCRVisibilityScorer._get_shared_ocr_model()
                     if ocr_model is not None:
                         import numpy as np
-                        crop_np = np.array(local_crop)
+                        crop_np = np.array(crop)
                         results = ocr_model.ocr(crop_np, cls=True)
                         if results and results[0]:
                             texts = [r[1][0] for r in results[0] if r and len(r) > 1]
@@ -507,6 +548,8 @@ def run_pipeline(question: str,
                 top_k_frames: int = 5,
                 ocr_score_mode: str = "paddle",
                 reasoning_evidence_mode: str = "both",
+                reasoning_global_frame_count: int = 3,
+                reasoning_local_crop_count: int = 3,
                 verbose: bool = False) -> Dict[str, Any]:
     """
     Run the evidence mining pipeline.
@@ -520,6 +563,8 @@ def run_pipeline(question: str,
         top_k_frames: Number of top frames to retrieve
         ocr_score_mode: "paddle" or "vlm" for OCR readability scoring
         reasoning_evidence_mode: "both", "global", or "local" for final reasoning
+        reasoning_global_frame_count: Number of global frames for final reasoning
+        reasoning_local_crop_count: Number of local crops for final reasoning
         verbose: Print debug information
         
     Returns:
@@ -530,6 +575,15 @@ def run_pipeline(question: str,
         processor=processor,
         device=device,
         ocr_score_mode=ocr_score_mode,
-        reasoning_evidence_mode=reasoning_evidence_mode
+        reasoning_evidence_mode=reasoning_evidence_mode,
+        reasoning_global_frame_count=reasoning_global_frame_count,
+        reasoning_local_crop_count=reasoning_local_crop_count
     )
-    return pipeline.run(question, frames, top_k_frames, verbose)
+    return pipeline.run(
+        question,
+        frames,
+        top_k_frames=top_k_frames,
+        reasoning_global_frame_count=reasoning_global_frame_count,
+        reasoning_local_crop_count=reasoning_local_crop_count,
+        verbose=verbose,
+    )

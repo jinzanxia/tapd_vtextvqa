@@ -35,16 +35,16 @@ class QwenReasoner:
     
     def reason(self,
                question: str,
-               global_frame: Optional[Image.Image] = None,
-               local_crop: Optional[Image.Image] = None,
+               global_frame: Union[Image.Image, List[Image.Image], None] = None,
+               local_crop: Union[Image.Image, List[Image.Image], None] = None,
                context: str = "") -> str:
         """
         Generate answer using global and/or local evidence.
         
         Args:
             question: The original QA question
-            global_frame: Full scene context (optional)
-            local_crop: Zoomed-in target crop (optional)
+            global_frame: Full scene context image(s) (optional)
+            local_crop: Zoomed-in target crop image(s) (optional)
             context: Additional context string (optional)
             
         Returns:
@@ -55,83 +55,87 @@ class QwenReasoner:
             build_simple_reasoning_prompt
         )
         
+        global_frames = self._as_image_list(global_frame)
+        local_crops = self._as_image_list(local_crop)
+
         # Determine which evidence we have
-        has_global = global_frame is not None
-        has_local = local_crop is not None
+        has_global = bool(global_frames)
+        has_local = bool(local_crops)
         
         if has_global and has_local:
-            # Use both global and local evidence
-            return self._reason_with_both_evidence(
-                question, global_frame, local_crop, context
+            return self._reason_with_multiple_images(
+                question,
+                global_frames,
+                local_crops,
+                context,
             )
         elif has_global:
-            # Use only global frame
-            return self._reason_with_single_image(
-                question, global_frame, context="Global frame context"
+            return self._reason_with_multiple_images(
+                question,
+                global_frames,
+                [],
+                context or "Global frame context",
             )
         elif has_local:
-            # Use only local crop
-            return self._reason_with_single_image(
-                question, local_crop, context="Zoomed-in crop of target region"
+            return self._reason_with_multiple_images(
+                question,
+                [],
+                local_crops,
+                context or "Zoomed-in crop of target region",
             )
         else:
             logger.warning("No evidence provided for reasoning")
             return "Unable to process - no evidence provided."
-    
-    def _reason_with_both_evidence(self,
-                                   question: str,
-                                   global_frame: Image.Image,
-                                   local_crop: Image.Image,
-                                   context: str = "") -> str:
+
+    def _reason_with_multiple_images(self,
+                                     question: str,
+                                     global_frames: List[Image.Image],
+                                     local_crops: List[Image.Image],
+                                     context: str = "") -> str:
         """
-        Generate answer using both global and local evidence.
-        
-        Args:
-            question: The QA question
-            global_frame: Full scene image
-            local_crop: Target region crop
-            context: Additional context
-            
-        Returns:
-            Generated answer
+        Generate answer using any number of global frames and local crops.
+
+        Images are sent to Qwen in this order: all global frames first, then all local crops.
         """
-        from utils.prompt_builder import build_final_reasoning_prompt
-        
-        prompt = build_final_reasoning_prompt(question, context)
-        
+        all_images = global_frames + local_crops
+        if not all_images:
+            logger.warning("No images provided for multi-image reasoning")
+            return "Unable to process - no evidence provided."
+
         try:
-            # Build conversation with two images
-            prompt = 'Please provide a brief answer based on the images, using as few words as possible. Question: ' + question
+            evidence_note = self._build_evidence_note(len(global_frames), len(local_crops), context)
+            prompt = (
+                f"{evidence_note}\n\n"
+                "Please provide a brief answer based on the images, using as few words as possible. "
+                f"Question: {question}"
+            )
+
             conversation = [
                 {"role": "system", "content": "You are a helpful assistant."},
                 {
                     "role": "user",
-                    "content": [
-                        {"type": "image"},
-                        {"type": "image"},
+                    "content": [{"type": "image"} for _ in all_images] + [
                         {"type": "text", "text": prompt},
-                    ]
+                    ],
                 },
             ]
-            
+
             text = self.processor.apply_chat_template(
                 conversation,
                 tokenize=False,
-                add_generation_prompt=True
+                add_generation_prompt=True,
             )
 
-            global_frame = self._ensure_min_vlm_size(global_frame)
-            local_crop = self._ensure_min_vlm_size(local_crop)
-            
+            images = [self._ensure_min_vlm_size(image) for image in all_images]
+
             inputs = self.processor(
                 text=[text],
-                images=[global_frame, local_crop],
+                images=images,
                 padding=True,
                 return_tensors="pt",
             )
             inputs = inputs.to(self.model.device)
-            
-            # Generate response
+
             with torch.no_grad():
                 output_ids = self.model.generate(
                     **inputs,
@@ -140,27 +144,40 @@ class QwenReasoner:
                     temperature=0,
                     num_beams=1,
                 )
-            
-            # Decode response
+
             generated_ids_trimmed = [
-                out_ids[len(in_ids):] 
+                out_ids[len(in_ids):]
                 for in_ids, out_ids in zip(inputs.input_ids, output_ids)
             ]
-            response = self.processor.batch_decode(
+            return self.processor.batch_decode(
                 generated_ids_trimmed,
                 skip_special_tokens=True,
-                clean_up_tokenization_spaces=False
+                clean_up_tokenization_spaces=False,
             )[0].strip()
-            
-            # Clean up response
-            #response = self._clean_response(response)
-            
-            return response
-            
+
         except Exception as e:
-            logger.error(f"Error reasoning with both evidence: {e}")
+            logger.error(f"Error reasoning with multiple images: {e}")
             return f"Unable to process: {str(e)}"
-        
+
+    def _reason_with_both_evidence(self,
+                                   question: str,
+                                   global_frame: Image.Image,
+                                   local_crop: Image.Image,
+                                   context: str = "") -> str:
+        """
+        Generate answer using both global and local evidence.
+
+        Args:
+            question: The QA question
+            global_frame: Full scene image
+            local_crop: Target region crop
+            context: Additional context
+
+        Returns:
+            Generated answer
+        """
+        return self._reason_with_multiple_images(question, [global_frame], [local_crop], context)
+
     def _reason_with_both_evidence_bak(self,
                                    question: str,
                                    global_frame: Image.Image,
@@ -337,6 +354,32 @@ class QwenReasoner:
         return image.resize(new_size, Image.Resampling.BICUBIC)
 
     @staticmethod
+    def _as_image_list(images: Union[Image.Image, List[Image.Image], None]) -> List[Image.Image]:
+        """Normalize optional single/list image inputs into a clean list."""
+        if images is None:
+            return []
+        if isinstance(images, Image.Image):
+            return [images]
+        return [image for image in images if isinstance(image, Image.Image)]
+
+    @staticmethod
+    def _build_evidence_note(global_count: int, local_count: int, context: str = "") -> str:
+        """Describe image ordering for multi-image prompts."""
+        parts = []
+        if global_count:
+            parts.append(f"The first {global_count} image(s) are full video frames in relevance order.")
+        if local_count:
+            start = global_count + 1
+            end = global_count + local_count
+            if start == end:
+                parts.append(f"Image {start} is a zoomed-in crop of a candidate target region.")
+            else:
+                parts.append(f"Images {start}-{end} are zoomed-in crops of candidate target regions in score order.")
+        if context:
+            parts.append(context)
+        return " ".join(parts)
+
+    @staticmethod
     def _clean_response(response: str) -> str:
         """
         Clean up model response.
@@ -361,8 +404,8 @@ class QwenReasoner:
 
 
 def run_vlm_reasoning(question: str,
-                     global_frame: Optional[Image.Image] = None,
-                     local_crop: Optional[Image.Image] = None,
+                     global_frame: Union[Image.Image, List[Image.Image], None] = None,
+                     local_crop: Union[Image.Image, List[Image.Image], None] = None,
                      model: Optional[Qwen2_5_VLForConditionalGeneration] = None,
                      processor: Optional[AutoProcessor] = None,
                      device: str = "cuda:0",
@@ -372,8 +415,8 @@ def run_vlm_reasoning(question: str,
     
     Args:
         question: The original QA question
-        global_frame: Full scene context (optional)
-        local_crop: Zoomed-in target crop (optional)
+        global_frame: Full scene context image(s) (optional)
+        local_crop: Zoomed-in target crop image(s) (optional)
         model: Optional Qwen model
         processor: Optional processor
         device: Device to run on

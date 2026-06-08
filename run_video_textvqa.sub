@@ -51,6 +51,8 @@ case "${INFERENCE_MODE}" in
         OCR_SCORE_MODE="${OCR_SCORE_MODE:-paddle}"
         GLOBAL_ROUTE="${GLOBAL_ROUTE:-sfa}"
         REASONING_EVIDENCE_MODE="${REASONING_EVIDENCE_MODE:-both}"
+        NUM_REASONING_GLOBAL_FRAMES="${NUM_REASONING_GLOBAL_FRAMES:-3}"
+        NUM_REASONING_LOCAL_CROPS="${NUM_REASONING_LOCAL_CROPS:-3}"
         MODE_LABEL="Evidence Mining Pipeline"
         ;;
     baseline)
@@ -115,6 +117,8 @@ if [ "${INFERENCE_MODE}" = "evidence" ]; then
     echo "OCR Score Mode: ${OCR_SCORE_MODE}"
     echo "Global Route: ${GLOBAL_ROUTE}"
     echo "Reasoning Evidence Mode: ${REASONING_EVIDENCE_MODE}"
+    echo "Reasoning Global Frames: ${NUM_REASONING_GLOBAL_FRAMES}"
+    echo "Reasoning Local Crops: ${NUM_REASONING_LOCAL_CROPS}"
     echo "Install PaddleOCR: ${INSTALL_PADDLEOCR}"
 fi
 echo "Submitted at: $(date)"
@@ -167,7 +171,9 @@ if [ '${INFERENCE_MODE}' = 'evidence' ]; then
         --top-k-frames ${TOP_K_FRAMES} \
         --ocr-score-mode ${OCR_SCORE_MODE} \
         --global-route ${GLOBAL_ROUTE} \
-        --reasoning-evidence-mode ${REASONING_EVIDENCE_MODE}
+        --reasoning-evidence-mode ${REASONING_EVIDENCE_MODE} \
+        --num-reasoning-global-frames ${NUM_REASONING_GLOBAL_FRAMES} \
+        --num-reasoning-local-crops ${NUM_REASONING_LOCAL_CROPS}
 elif [ '${INFERENCE_MODE}' = 'baseline' ]; then
     ADAPTER_ARGS=()
     if [ -n '${ADAPTER_PATH:-}' ]; then
