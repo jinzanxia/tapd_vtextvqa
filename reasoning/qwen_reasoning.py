@@ -95,9 +95,10 @@ class QwenReasoner:
         """
         Generate answer using any number of global frames and local crops.
 
-        Images are sent to Qwen in this order: all global frames first, then all local crops.
+        Images are sent to Qwen in this order: global frame 1, local crop 1,
+        global frame 2, local crop 2, and so on.
         """
-        all_images = global_frames + local_crops
+        all_images = self._interleave_evidence_images(global_frames, local_crops)
         if not all_images:
             logger.warning("No images provided for multi-image reasoning")
             return "Unable to process - no evidence provided."
@@ -363,18 +364,36 @@ class QwenReasoner:
         return [image for image in images if isinstance(image, Image.Image)]
 
     @staticmethod
+    def _interleave_evidence_images(global_frames: List[Image.Image],
+                                    local_crops: List[Image.Image]) -> List[Image.Image]:
+        """Order evidence as G1, L1, G2, L2, appending any unpaired extras at the end."""
+        images = []
+        max_count = max(len(global_frames), len(local_crops))
+        for idx in range(max_count):
+            if idx < len(global_frames):
+                images.append(global_frames[idx])
+            if idx < len(local_crops):
+                images.append(local_crops[idx])
+        return images
+
+    @staticmethod
     def _build_evidence_note(global_count: int, local_count: int, context: str = "") -> str:
         """Describe image ordering for multi-image prompts."""
         parts = []
-        if global_count:
-            parts.append(f"The first {global_count} image(s) are full video frames in relevance order.")
-        if local_count:
-            start = global_count + 1
-            end = global_count + local_count
-            if start == end:
-                parts.append(f"Image {start} is a zoomed-in crop of a candidate target region.")
-            else:
-                parts.append(f"Images {start}-{end} are zoomed-in crops of candidate target regions in score order.")
+        if global_count and local_count:
+            paired_count = min(global_count, local_count)
+            parts.append(
+                f"Images are interleaved as global frame then its corresponding local crop for "
+                f"{paired_count} pair(s)."
+            )
+            if global_count > local_count:
+                parts.append("Any remaining images after the pairs are additional global frames.")
+            elif local_count > global_count:
+                parts.append("Any remaining images after the pairs are additional local crops.")
+        elif global_count:
+            parts.append(f"The {global_count} image(s) are full video frames in relevance order.")
+        elif local_count:
+            parts.append(f"The {local_count} image(s) are zoomed-in crops of candidate target regions in score order.")
         if context:
             parts.append(context)
         return " ".join(parts)

@@ -255,7 +255,11 @@ class EvidenceMiningPipeline:
                 
                 if visibility_results["success"]:
                     global_frames = self._select_top_frames(retrieval_results, reasoning_global_frame_count)
-                    local_crops = self._select_top_crops(visibility_results, reasoning_local_crop_count)
+                    local_crops = self._select_top_crops(
+                        visibility_results,
+                        reasoning_local_crop_count,
+                        retrieval_results=retrieval_results,
+                    )
                 else:
                     global_frames = self._select_top_frames(retrieval_results, reasoning_global_frame_count)
                     local_crops = []
@@ -433,10 +437,39 @@ class EvidenceMiningPipeline:
         return [item["frame"] for item in retrieval_results[:max(1, count)] if item.get("frame") is not None]
 
     @staticmethod
-    def _select_top_crops(visibility_results: Dict[str, Any], count: int) -> List[Image.Image]:
-        """Return top ranked crops from visibility scoring output."""
+    def _select_top_crops(visibility_results: Dict[str, Any],
+                          count: int,
+                          retrieval_results: Optional[List[Dict[str, Any]]] = None) -> List[Image.Image]:
+        """Return top crops, preferring one crop per retrieved frame in global-frame order."""
         scores = visibility_results.get("scores") or []
-        crops = [item["crop"] for item in scores[:max(1, count)] if item.get("crop") is not None]
+        count = max(1, count)
+        crops = []
+
+        if retrieval_results:
+            used_score_ids = set()
+            for frame_result in retrieval_results:
+                frame_id = frame_result.get("frame_id")
+                for score_idx, item in enumerate(scores):
+                    region = item.get("region") or {}
+                    if score_idx in used_score_ids:
+                        continue
+                    if region.get("frame_id") == frame_id and item.get("crop") is not None:
+                        crops.append(item["crop"])
+                        used_score_ids.add(score_idx)
+                        break
+                if len(crops) >= count:
+                    break
+
+            if len(crops) < count:
+                for score_idx, item in enumerate(scores):
+                    if score_idx in used_score_ids or item.get("crop") is None:
+                        continue
+                    crops.append(item["crop"])
+                    if len(crops) >= count:
+                        break
+        else:
+            crops = [item["crop"] for item in scores[:count] if item.get("crop") is not None]
+
         if not crops and visibility_results.get("best_crop") is not None:
             crops = [visibility_results["best_crop"]]
         return crops
