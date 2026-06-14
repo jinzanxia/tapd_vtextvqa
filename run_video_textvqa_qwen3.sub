@@ -58,6 +58,13 @@ case "${INFERENCE_MODE}" in
     baseline)
         SCRIPT_PATH="$PWD/infer_codes/qwen.py"
         OUTPUT_JSON="./results/qwen3_vl_8b_changed_baseline_val.json"
+        NUM_SAMPLED_FRAMES="${NUM_SAMPLED_FRAMES:-16}"
+        TOP_K_FRAMES="${TOP_K_FRAMES:-5}"
+        OCR_SCORE_MODE="${OCR_SCORE_MODE:-vlm}"
+        GLOBAL_ROUTE="${GLOBAL_ROUTE:-sfa}"
+        REASONING_EVIDENCE_MODE="${REASONING_EVIDENCE_MODE:-both}"
+        NUM_REASONING_GLOBAL_FRAMES="${NUM_REASONING_GLOBAL_FRAMES:-3}"
+        NUM_REASONING_LOCAL_CROPS="${NUM_REASONING_LOCAL_CROPS:-3}"
         MODE_LABEL="SFA Baseline"
         ;;
     *)
