@@ -1,5 +1,9 @@
 import torch
-from transformers import Qwen2_5_VLForConditionalGeneration, AutoProcessor
+from transformers import AutoProcessor, Qwen2_5_VLForConditionalGeneration
+try:
+    from transformers import Qwen3VLForConditionalGeneration
+except ImportError:
+    Qwen3VLForConditionalGeneration = None
 try:
     from peft import PeftModel
 except ImportError:
@@ -19,6 +23,19 @@ import argparse
 
 WIN_SIZE = 0.6
 THRESHOLD = 0.7
+
+
+def get_qwen_vl_model_class(model_name: str):
+    """Select the correct Hugging Face class for Qwen2.5-VL vs Qwen3-VL."""
+    if "qwen3" in (model_name or "").lower():
+        if Qwen3VLForConditionalGeneration is None:
+            raise ImportError(
+                "Qwen3-VL requires a transformers version with "
+                "Qwen3VLForConditionalGeneration. Please upgrade transformers "
+                "inside the container, e.g. pip install -U transformers accelerate."
+            )
+        return Qwen3VLForConditionalGeneration
+    return Qwen2_5_VLForConditionalGeneration
 
 def get_parser():
     parser = argparse.ArgumentParser(description="builtin configs")
@@ -107,7 +124,8 @@ if __name__ == "__main__":
     torch.cuda.set_device(device)
 
     model_path = args.model_name
-    model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
+    model_cls = get_qwen_vl_model_class(model_path)
+    model = model_cls.from_pretrained(
         model_path,
         device_map=device,
         torch_dtype=torch.bfloat16,

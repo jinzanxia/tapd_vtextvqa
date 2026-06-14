@@ -28,6 +28,10 @@ IMAGE="docker://xiaojino/sfa:v1.2"
 # from the compute node unless the image already has PaddleOCR.
 INSTALL_PADDLEOCR="${INSTALL_PADDLEOCR:-1}"
 
+# Qwen3-VL needs a transformers build that includes Qwen3VLForConditionalGeneration.
+# Set to 0 if your container already has a compatible transformers version.
+INSTALL_QWEN3_TRANSFORMERS="${INSTALL_QWEN3_TRANSFORMERS:-1}"
+
 # Data configuration
 DATA_DIR="/mnt/fast/nobackup/scratch4weeks/nc324se/data/M4-ViteVQA"
 GT_JSON="${DATA_DIR}/Annotations/ViteVQA_0.0.2_t1s1val.json"
@@ -118,6 +122,7 @@ fi
 echo "Data: ${GT_JSON}"
 echo "Videos: ${VIDEO_DIR}"
 echo "Output: ${OUTPUT_JSON}"
+echo "Install/Upgrade Qwen3 Transformers: ${INSTALL_QWEN3_TRANSFORMERS}"
 if [ "${INFERENCE_MODE}" = "evidence" ]; then
     echo "Sampled Frames: ${NUM_SAMPLED_FRAMES}"
     echo "Top-K Frames: ${TOP_K_FRAMES}"
@@ -151,6 +156,10 @@ echo ''
 export FLAGS_enable_pir_api=0
 export FLAGS_use_pir_api=0
 export FLAGS_enable_onednn=0
+
+if [ '${INSTALL_QWEN3_TRANSFORMERS}' = '1' ]; then
+    python -m pip install --user --no-cache-dir --upgrade 'transformers>=4.57.0' accelerate qwen-vl-utils
+fi
 
 if [ '${INFERENCE_MODE}' = 'evidence' ]; then
     ADAPTER_ARGS=()

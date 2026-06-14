@@ -40,7 +40,11 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Import models
-from transformers import Qwen2_5_VLForConditionalGeneration, AutoProcessor
+from transformers import AutoProcessor, Qwen2_5_VLForConditionalGeneration
+try:
+    from transformers import Qwen3VLForConditionalGeneration
+except ImportError:
+    Qwen3VLForConditionalGeneration = None
 try:
     from peft import PeftModel
 except ImportError:
@@ -78,6 +82,19 @@ except Exception as e:
 
 # Import metrics
 from metric import anls_metric, stvqa_acc_metric
+
+
+def get_qwen_vl_model_class(model_name: str):
+    """Select the correct Hugging Face class for Qwen2.5-VL vs Qwen3-VL."""
+    if "qwen3" in (model_name or "").lower():
+        if Qwen3VLForConditionalGeneration is None:
+            raise ImportError(
+                "Qwen3-VL requires a transformers version with "
+                "Qwen3VLForConditionalGeneration. Please upgrade transformers "
+                "inside the container, e.g. pip install -U transformers accelerate."
+            )
+        return Qwen3VLForConditionalGeneration
+    return Qwen2_5_VLForConditionalGeneration
 
 
 def sample_frames_from_video(video_path, num_frames):
@@ -312,7 +329,8 @@ def main():
     
     # Load model and processor
     logger.info(f"Loading model: {args.model_name}")
-    model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
+    model_cls = get_qwen_vl_model_class(args.model_name)
+    model = model_cls.from_pretrained(
         args.model_name,
         device_map=device,
         torch_dtype=torch.bfloat16,
