@@ -17,6 +17,10 @@ from transformers import (
     get_scheduler,
 )
 try:
+    from transformers import Qwen3VLForConditionalGeneration
+except ImportError:
+    Qwen3VLForConditionalGeneration = None
+try:
     from peft import LoraConfig, TaskType, get_peft_model
 except ImportError:
     LoraConfig = None
@@ -57,6 +61,28 @@ def is_main_process(rank):
 
 def parse_lora_targets(target_modules):
     return [module.strip() for module in target_modules.split(",") if module.strip()]
+
+
+def get_qwen_vl_model_class(model_name: str):
+    """Select the correct Hugging Face class for Qwen2.5-VL vs Qwen3-VL."""
+    if "qwen3" in (model_name or "").lower():
+        if Qwen3VLForConditionalGeneration is None:
+            raise ImportError(
+                "Qwen3-VL requires a transformers version with "
+                "Qwen3VLForConditionalGeneration. Please upgrade transformers "
+                "inside the container, e.g. pip install -U transformers accelerate."
+            )
+        return Qwen3VLForConditionalGeneration
+    return Qwen2_5_VLForConditionalGeneration
+
+
+def normalize_fps_for_processor(fps_values):
+    """Newer processors expect scalar fps for a single video, not [fps]."""
+    if not fps_values:
+        return None
+    if isinstance(fps_values, (list, tuple)) and len(fps_values) == 1:
+        return fps_values[0]
+    return fps_values
 
 
 def apply_lora(model, args, rank):
@@ -221,7 +247,11 @@ class QwenDataCollator:
             if feature["video_inputs"] is not None:
                 video_inputs.append(feature["video_inputs"][0])
             if feature["video_kwargs"] is not None:
-                fps.append(feature["video_kwargs"]["fps"][0])
+                feature_fps = feature["video_kwargs"].get("fps")
+                if isinstance(feature_fps, (list, tuple)):
+                    fps.append(feature_fps[0])
+                elif feature_fps is not None:
+                    fps.append(feature_fps)
 
         if len(image_inputs) == 0:
             image_inputs = None
@@ -234,7 +264,7 @@ class QwenDataCollator:
             videos=video_inputs,
             padding=True,
             return_tensors="pt",
-            fps=fps if fps else None,
+            fps=normalize_fps_for_processor(fps),
         )
 
         prompt_inputs = self.processor(
@@ -243,7 +273,7 @@ class QwenDataCollator:
             videos=video_inputs,
             padding=True,
             return_tensors="pt",
-            fps=fps if fps else None,
+            fps=normalize_fps_for_processor(fps),
         )
 
         labels = inputs["input_ids"].clone()
@@ -362,7 +392,8 @@ def main():
         text_rerank_mode=args.text_rerank_mode,
     )
 
-    model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
+    model_cls = get_qwen_vl_model_class(args.model_name)
+    model = model_cls.from_pretrained(
         args.model_name,
         torch_dtype=torch.bfloat16 if device.type == "cuda" else None,
         attn_implementation="sdpa", #"flash_attention_2",
