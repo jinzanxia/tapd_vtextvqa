@@ -37,6 +37,17 @@ def get_qwen_vl_model_class(model_name: str):
         return Qwen3VLForConditionalGeneration
     return Qwen2_5_VLForConditionalGeneration
 
+
+def normalize_video_kwargs_for_processor(video_kwargs):
+    """Newer processors expect scalar fps for a single video, not [fps]."""
+    if not video_kwargs:
+        return video_kwargs
+    video_kwargs = dict(video_kwargs)
+    fps = video_kwargs.get("fps")
+    if isinstance(fps, (list, tuple)) and len(fps) == 1:
+        video_kwargs["fps"] = fps[0]
+    return video_kwargs
+
 def get_parser():
     parser = argparse.ArgumentParser(description="builtin configs")
     parser.add_argument("--gt-json", help="gt json file path",)
@@ -212,6 +223,7 @@ if __name__ == "__main__":
             d2_predictor=d2_predictor,
             d2_class_ids=d2_class_ids,
         )
+        video_kwargs = normalize_video_kwargs_for_processor(video_kwargs)
 
         # rebuild prompt with OCR text if available
         ocr_prefix = ''

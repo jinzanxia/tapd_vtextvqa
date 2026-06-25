@@ -19,6 +19,17 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 warnings.filterwarnings("ignore", category=UserWarning)
 
 
+def normalize_video_kwargs_for_processor(video_kwargs):
+    """Newer processors expect scalar fps for a single video, not [fps]."""
+    if not video_kwargs:
+        return video_kwargs
+    video_kwargs = dict(video_kwargs)
+    fps = video_kwargs.get("fps")
+    if isinstance(fps, (list, tuple)) and len(fps) == 1:
+        video_kwargs["fps"] = fps[0]
+    return video_kwargs
+
+
 def get_parser():
     parser = argparse.ArgumentParser(description="Qwen baseline without crop/zoom/OCR")
     parser.add_argument("--gt-json", help="gt json file path")
@@ -90,6 +101,7 @@ if __name__ == "__main__":
             conversation,
             return_video_kwargs=True,
         )
+        video_kwargs = normalize_video_kwargs_for_processor(video_kwargs)
 
         text = processor.apply_chat_template(conversation, tokenize=False, add_generation_prompt=True)
         inputs = processor(
