@@ -12,6 +12,7 @@
 set -euo pipefail
 
 IMAGE="docker://xiaojino/sfa:v1.2"
+# Baseline/SFA route only: fine-tune with qwen_finetune.py and evaluate with infer_codes/qwen.py.
 TRAIN_SCRIPT_PATH="$PWD/infer_codes/qwen_finetune.py"
 EVAL_SCRIPT_PATH="$PWD/infer_codes/qwen.py"
 
@@ -62,7 +63,7 @@ import peft
 print('PEFT OK:', peft.__version__)
 PYCODE
 
-echo '===== START TRAINING Qwen3-VL-8B-Instruct ====='
+echo '===== START BASELINE/SFA TRAINING Qwen3-VL-8B-Instruct ====='
 python -m torch.distributed.run \
     --standalone \
     --nproc_per_node=1 \
@@ -95,7 +96,7 @@ python -m torch.distributed.run \
 
 echo '===== TRAINING FINISHED ====='
 
-echo '===== START EVALUATION WITH Qwen3 ADAPTER ====='
+echo '===== START BASELINE/SFA EVALUATION WITH Qwen3 ADAPTER ====='
 python ${EVAL_SCRIPT_PATH} \
     --gt-json ${GT_JSON} \
     --video-dir ${VIDEO_DIR} \
