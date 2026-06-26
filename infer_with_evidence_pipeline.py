@@ -29,6 +29,7 @@ import sys
 import importlib
 from pathlib import Path
 from tqdm import tqdm
+from PIL import Image
 import warnings
 warnings.filterwarnings("ignore", category=UserWarning)
 
@@ -217,6 +218,65 @@ def run_sfa_global_reasoning(question, video_path, model, processor):
     )[0].strip()
 
 
+def run_direct_frame_reasoning(question, frames, model, processor, max_new_tokens=128):
+    """Run plain Qwen reasoning over uniformly sampled frames without SFA processing."""
+    image_inputs = []
+    for frame in frames:
+        if isinstance(frame, Image.Image):
+            image_inputs.append(frame)
+        else:
+            image_inputs.append(Image.fromarray(frame))
+
+    if not image_inputs:
+        return "Failed to process video"
+
+    prompt = (
+        "Please provide a brief answer based on the sampled video frames, "
+        "using as few words as possible. Question: " + question
+    )
+    conversation = [
+        {"role": "system", "content": "You are a helpful assistant."},
+        {
+            "role": "user",
+            "content": [{"type": "image"} for _ in image_inputs] + [
+                {"type": "text", "text": prompt},
+            ],
+        },
+    ]
+
+    text = processor.apply_chat_template(
+        conversation,
+        tokenize=False,
+        add_generation_prompt=True,
+    )
+    inputs = processor(
+        text=[text],
+        images=image_inputs,
+        padding=True,
+        return_tensors="pt",
+    )
+    inputs = inputs.to(model.device)
+
+    with torch.no_grad():
+        output_ids = model.generate(
+            **inputs,
+            max_new_tokens=max_new_tokens,
+            do_sample=False,
+            temperature=0,
+            num_beams=1,
+        )
+
+    generated_ids_trimmed = [
+        out_ids[len(in_ids):]
+        for in_ids, out_ids in zip(inputs.input_ids, output_ids)
+    ]
+    return processor.batch_decode(
+        generated_ids_trimmed,
+        skip_special_tokens=True,
+        clean_up_tokenization_spaces=False,
+    )[0].strip()
+
+
 def get_parser():
     """Create argument parser."""
     parser = argparse.ArgumentParser(
@@ -268,9 +328,9 @@ def get_parser():
     )
     parser.add_argument(
         "--global-route",
-        choices=["sfa", "evidence"],
+        choices=["sfa", "evidence", "direct_frames"],
         default="sfa",
-        help="Route global questions to original SFA video inference or evidence top-frame inference (default: sfa)"
+        help="Route global questions to SFA video inference, evidence top-frame inference, or direct sampled-frame Qwen inference (default: sfa)"
     )
     parser.add_argument(
         "--reasoning-evidence-mode",
@@ -457,13 +517,27 @@ def main():
                 question_type = route_question(question) if route_question else "local"
                 route_counts[question_type] = route_counts.get(question_type, 0) + 1
 
-                if question_type == "global" and args.global_route == "sfa":
-                    response = run_sfa_global_reasoning(
-                        question,
-                        video_path,
-                        model=model,
-                        processor=processor,
-                    )
+                if question_type == "global" and args.global_route in {"sfa", "direct_frames"}:
+                    if args.global_route == "sfa":
+                        response = run_sfa_global_reasoning(
+                            question,
+                            video_path,
+                            model=model,
+                            processor=processor,
+                        )
+                    else:
+                        frames = sample_frames_from_video(video_path, args.num_sampled_frames)
+                        if not frames:
+                            logger.error(f"Skipping QA {qid}: failed to sample frames from {video_path}")
+                            response = "Failed to process video"
+                            pipeline_failures += 1
+                        else:
+                            response = run_direct_frame_reasoning(
+                                question,
+                                frames=frames,
+                                model=model,
+                                processor=processor,
+                            )
                 else:
                     frames = sample_frames_from_video(video_path, args.num_sampled_frames)
                     if not frames:

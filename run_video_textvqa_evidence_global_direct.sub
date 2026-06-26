@@ -1,0 +1,99 @@
+#!/bin/bash
+#SBATCH --job-name=qwen_evidence_global_direct
+#SBATCH --partition=a100
+#SBATCH --gpus=1
+#SBATCH --nodes=1
+#SBATCH --ntasks-per-node=1
+#SBATCH --mem=80G
+#SBATCH --time=72:00:00
+#SBATCH -o ./logs/qwen_evidence_global_direct.%N.%j.out
+#SBATCH -e ./logs/qwen_evidence_global_direct.%N.%j.err
+
+set -euo pipefail
+
+IMAGE="docker://xiaojino/sfa:v1.2"
+SCRIPT_PATH="$PWD/infer_with_evidence_pipeline.py"
+
+DATA_DIR="/mnt/fast/nobackup/scratch4weeks/nc324se/data/M4-ViteVQA"
+GT_JSON="${DATA_DIR}/Annotations/ViteVQA_0.0.2_t1s1val.json"
+VIDEO_DIR="${DATA_DIR}/video"
+VTS_MODEL="${DATA_DIR}/GoMatching_pp_vitaeb_bovtext.pth"
+VTS_CONFIG="./GoMatching/configs/GoMatching_PP_BOVText_vit.yaml"
+
+MODEL_NAME="${MODEL_NAME:-Qwen/Qwen2.5-VL-7B-Instruct}"
+ADAPTER_PATH="${ADAPTER_PATH:-}"
+OUTPUT_JSON="${OUTPUT_JSON:-./results/qwen2_5_vl_7b_evidence_local_global_direct_val.json}"
+
+# Global questions: no SFA, no Scan/Focus/Amplify; sample raw frames and feed them directly to Qwen.
+# Local questions: use the evidence pipeline with retrieval, localization, crop scoring, and final reasoning.
+NUM_SAMPLED_FRAMES="${NUM_SAMPLED_FRAMES:-16}"
+TOP_K_FRAMES="${TOP_K_FRAMES:-5}"
+OCR_SCORE_MODE="${OCR_SCORE_MODE:-vlm}"
+REASONING_EVIDENCE_MODE="${REASONING_EVIDENCE_MODE:-both}"
+NUM_REASONING_GLOBAL_FRAMES="${NUM_REASONING_GLOBAL_FRAMES:-3}"
+NUM_REASONING_LOCAL_CROPS="${NUM_REASONING_LOCAL_CROPS:-3}"
+
+# Set to 1 when MODEL_NAME is Qwen/Qwen3-VL-8B-Instruct and the container
+# does not already include Qwen3VLForConditionalGeneration.
+INSTALL_QWEN3_TRANSFORMERS="${INSTALL_QWEN3_TRANSFORMERS:-0}"
+
+mkdir -p ./logs ./results
+
+if command -v apptainer >/dev/null 2>&1; then
+    CTR="apptainer"
+elif command -v singularity >/dev/null 2>&1; then
+    CTR="singularity"
+else
+    echo "Neither apptainer nor singularity found."
+    exit 1
+fi
+
+for path in "${SCRIPT_PATH}" "${GT_JSON}" "${VTS_MODEL}" "${VTS_CONFIG}"; do
+    test -f "${path}" || { echo "Missing file: ${path}"; exit 1; }
+done
+
+test -d "${VIDEO_DIR}" || { echo "Missing video dir: ${VIDEO_DIR}"; exit 1; }
+
+${CTR} exec --nv \
+    --bind "${PWD}:${PWD}" \
+    --pwd "${PWD}" \
+    --env TOKENIZERS_PARALLELISM=false \
+    --env PYTHONPATH="${PWD}:${PYTHONPATH:-}" \
+    "${IMAGE}" \
+    bash -lc "
+if [ '${INSTALL_QWEN3_TRANSFORMERS}' = '1' ]; then
+    python -m pip install --user --no-cache-dir --upgrade 'transformers>=4.57.0' accelerate qwen-vl-utils
+fi
+
+ADAPTER_ARGS=()
+if [ -n '${ADAPTER_PATH:-}' ]; then
+    ADAPTER_ARGS=(--adapter-path '${ADAPTER_PATH}')
+fi
+
+echo '===== START EVIDENCE INFERENCE: GLOBAL DIRECT FRAMES, LOCAL EVIDENCE ====='
+echo 'Model: ${MODEL_NAME}'
+echo 'Output: ${OUTPUT_JSON}'
+echo 'Sampled frames: ${NUM_SAMPLED_FRAMES}'
+echo 'Top-K evidence frames: ${TOP_K_FRAMES}'
+echo 'Local evidence mode: ${REASONING_EVIDENCE_MODE}'
+
+python ${SCRIPT_PATH} \
+    --gt-json ${GT_JSON} \
+    --video-dir ${VIDEO_DIR} \
+    --model-name ${MODEL_NAME} \
+    \"\${ADAPTER_ARGS[@]}\" \
+    --vts-config ${VTS_CONFIG} \
+    --vts-model ${VTS_MODEL} \
+    --output ${OUTPUT_JSON} \
+    --use-evidence-mining \
+    --num-sampled-frames ${NUM_SAMPLED_FRAMES} \
+    --top-k-frames ${TOP_K_FRAMES} \
+    --ocr-score-mode ${OCR_SCORE_MODE} \
+    --global-route direct_frames \
+    --reasoning-evidence-mode ${REASONING_EVIDENCE_MODE} \
+    --num-reasoning-global-frames ${NUM_REASONING_GLOBAL_FRAMES} \
+    --num-reasoning-local-crops ${NUM_REASONING_LOCAL_CROPS}
+
+echo '===== FINISHED EVIDENCE GLOBAL-DIRECT INFERENCE ====='
+echo 'Output json: ${OUTPUT_JSON}'
+"
