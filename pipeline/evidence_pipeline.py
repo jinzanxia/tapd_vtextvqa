@@ -178,9 +178,23 @@ class EvidenceMiningPipeline:
                     "visibility_results": None,
                 }
 
+            sampled_frames = self._ensure_pil_frames(frames)
+            if not sampled_frames:
+                logger.warning("No valid frames after PIL conversion")
+                return {
+                    "success": False,
+                    "answer": "Failed to process video",
+                    "error": "no valid input frames",
+                    "parsed_question": None,
+                    "question_type": question_type,
+                    "retrieval_results": [],
+                    "localization_results": [],
+                    "visibility_results": None,
+                }
             parsed_question = None
             localization_results = []
             visibility_results = None
+            local_crop_entries = []
 
             if question_type == "local":
                 # Stage 1: Question Structural Parsing
@@ -194,7 +208,7 @@ class EvidenceMiningPipeline:
             # Stage 2: Frame-Level Relevant Frame Retrieval / global frame selection
             logger.info("Stage 2: Frame Retrieval")
             retrieval_results = self._stage_2_retrieve_frames(
-                frames, retrieval_prompt, top_k_frames, verbose
+                sampled_frames, retrieval_prompt, top_k_frames, verbose
             )
             
             if not retrieval_results:
@@ -242,7 +256,7 @@ class EvidenceMiningPipeline:
             
             if not localization_results:
                 logger.warning("No regions localized, using full frame")
-                global_frames = self._select_top_frames(retrieval_results, reasoning_global_frame_count)
+                global_frames = sampled_frames
                 local_crops = []
             else:
                 # Stage 4: OCR Visibility Scoring
@@ -254,29 +268,55 @@ class EvidenceMiningPipeline:
                 )
                 
                 if visibility_results["success"]:
-                    global_frames = self._select_top_frames(retrieval_results, reasoning_global_frame_count)
-                    local_crops = self._select_top_crops(
+                    global_frames = sampled_frames
+                    local_crop_entries = self._select_top_crop_entries(
                         visibility_results,
                         reasoning_local_crop_count,
                         retrieval_results=retrieval_results,
                     )
+                    local_crops = [entry["crop"] for entry in local_crop_entries]
                 else:
-                    global_frames = self._select_top_frames(retrieval_results, reasoning_global_frame_count)
+                    global_frames = sampled_frames
                     local_crops = []
                     visibility_results = None
             
             # Stage 5 & 6: Evidence Fusion + Final Reasoning
             logger.info("Stage 5-6: Evidence Fusion and VLM Reasoning")
-            reasoning_global_frames, reasoning_local_crops, actual_reasoning_mode = self._select_reasoning_evidence(
-                global_frames,
-                local_crops,
-            )
+            if self.reasoning_evidence_mode == "local":
+                if local_crops:
+                    reasoning_global_frames = []
+                    reasoning_local_crops = local_crops
+                    actual_reasoning_mode = "local"
+                else:
+                    logger.warning("Local-only reasoning requested but local crop is missing; falling back to direct frames")
+                    reasoning_global_frames = sampled_frames
+                    reasoning_local_crops = []
+                    actual_reasoning_mode = "direct_frames_fallback"
+            else:
+                reasoning_global_frames = self._build_crop_replaced_frame_sequence(
+                    global_frames,
+                    local_crop_entries,
+                    enable_replacement=self.reasoning_evidence_mode != "global",
+                )
+                reasoning_local_crops = []
+                actual_reasoning_mode = (
+                    "crop_replaced_direct_frames"
+                    if local_crop_entries and self.reasoning_evidence_mode != "global"
+                    else "direct_frames"
+                )
             answer = self._stage_5_6_reason(
                 question,
                 reasoning_global_frames,
                 reasoning_local_crops,
                 parsed_question,
                 verbose,
+                postprocess_local_crop=local_crops,
+                context=(
+                    "The images follow the uniformly sampled video-frame order. "
+                    "Some positions may be zoomed local crop replacements for their original frames."
+                    if actual_reasoning_mode == "crop_replaced_direct_frames"
+                    else ""
+                ),
             )
 
             logger.info(f"Pipeline completed. Answer: {answer}")
@@ -398,7 +438,9 @@ class EvidenceMiningPipeline:
                          global_frame: Union[Image.Image, List[Image.Image], None],
                          local_crop: Union[Image.Image, List[Image.Image], None] = None,
                          parsed_question: Optional[Dict[str, Any]] = None,
-                         verbose: bool = False) -> str:
+                         verbose: bool = False,
+                         postprocess_local_crop: Union[Image.Image, List[Image.Image], None] = None,
+                         context: str = "") -> str:
         """Stage 5-6: Fuse evidence and generate final answer."""
         answer = run_vlm_reasoning(
             question,
@@ -406,11 +448,16 @@ class EvidenceMiningPipeline:
             local_crop=local_crop,
             model=self.model,
             processor=self.processor,
-            device=self.device
+            device=self.device,
+            context=context,
         )
 
         # Post-process answer to prefer short, extractable content for OCR-like tasks
-        answer_post = self._postprocess_answer(answer, parsed_question, local_crop)
+        answer_post = self._postprocess_answer(
+            answer,
+            parsed_question,
+            postprocess_local_crop if postprocess_local_crop is not None else local_crop,
+        )
         if verbose and answer != answer_post:
             logger.info(f"Post-processed answer: '{answer}' -> '{answer_post}'")
 
@@ -435,6 +482,128 @@ class EvidenceMiningPipeline:
     def _select_top_frames(retrieval_results: List[Dict[str, Any]], count: int) -> List[Image.Image]:
         """Return top retrieved frames for final reasoning."""
         return [item["frame"] for item in retrieval_results[:max(1, count)] if item.get("frame") is not None]
+
+    @staticmethod
+    def _ensure_pil_frames(frames: List[Union[np.ndarray, Image.Image]]) -> List[Image.Image]:
+        """Convert sampled video frames to PIL Images while preserving order and count."""
+        frames_pil = []
+        for frame in frames:
+            if isinstance(frame, np.ndarray):
+                if frame.dtype != np.uint8:
+                    frame = (frame * 255).astype(np.uint8) if frame.max() <= 1 else frame.astype(np.uint8)
+                frames_pil.append(Image.fromarray(frame))
+            elif isinstance(frame, Image.Image):
+                frames_pil.append(frame)
+            else:
+                logger.warning(f"Unsupported frame type: {type(frame)}")
+        return frames_pil
+
+    @staticmethod
+    def _build_crop_replaced_frame_sequence(frames: List[Image.Image],
+                                            crop_entries: List[Dict[str, Any]],
+                                            enable_replacement: bool = True) -> List[Image.Image]:
+        """
+        Return the full sampled-frame sequence, replacing selected frame positions with crops.
+
+        This keeps the final Qwen input aligned with direct-frame inference: same sampling
+        method, same number of images, with local evidence substituted in-place.
+        """
+        reasoning_frames = list(frames)
+        if not enable_replacement:
+            return reasoning_frames
+
+        replaced_frame_ids = set()
+        for entry in crop_entries:
+            frame_id = entry.get("frame_id")
+            crop = entry.get("crop")
+            try:
+                frame_id = int(frame_id) if frame_id is not None else None
+            except (TypeError, ValueError):
+                frame_id = None
+            if (
+                crop is None
+                or frame_id is None
+                or frame_id in replaced_frame_ids
+                or frame_id < 0
+                or frame_id >= len(reasoning_frames)
+            ):
+                continue
+            reasoning_frames[frame_id] = crop
+            replaced_frame_ids.add(frame_id)
+        return reasoning_frames
+
+    @staticmethod
+    def _select_top_crop_entries(visibility_results: Dict[str, Any],
+                                 count: int,
+                                 retrieval_results: Optional[List[Dict[str, Any]]] = None) -> List[Dict[str, Any]]:
+        """Return ranked crop entries with frame ids, preferring one crop per retrieved frame."""
+        scores = visibility_results.get("scores") or []
+        count = max(1, count)
+        entries = []
+
+        def add_entry(score_idx: int, item: Dict[str, Any]) -> None:
+            region = item.get("region") or {}
+            crop = item.get("crop")
+            frame_id = region.get("frame_id")
+            if crop is None or frame_id is None:
+                return
+            entries.append({
+                "crop": crop,
+                "frame_id": frame_id,
+                "score_index": score_idx,
+                "score": item.get("final_score", item.get("combined_score")),
+                "region": region,
+            })
+
+        if retrieval_results:
+            used_score_ids = set()
+            used_frame_ids = set()
+            for frame_result in retrieval_results:
+                frame_id = frame_result.get("frame_id")
+                if frame_id in used_frame_ids:
+                    continue
+                for score_idx, item in enumerate(scores):
+                    region = item.get("region") or {}
+                    if score_idx in used_score_ids:
+                        continue
+                    if region.get("frame_id") == frame_id:
+                        before_count = len(entries)
+                        add_entry(score_idx, item)
+                        if len(entries) > before_count:
+                            used_score_ids.add(score_idx)
+                            used_frame_ids.add(frame_id)
+                        break
+                if len(entries) >= count:
+                    break
+
+            if len(entries) < count:
+                for score_idx, item in enumerate(scores):
+                    region = item.get("region") or {}
+                    frame_id = region.get("frame_id")
+                    if score_idx in used_score_ids or frame_id in used_frame_ids:
+                        continue
+                    before_count = len(entries)
+                    add_entry(score_idx, item)
+                    if len(entries) > before_count:
+                        used_score_ids.add(score_idx)
+                        used_frame_ids.add(frame_id)
+                    if len(entries) >= count:
+                        break
+        else:
+            used_frame_ids = set()
+            for score_idx, item in enumerate(scores):
+                region = item.get("region") or {}
+                frame_id = region.get("frame_id")
+                if frame_id in used_frame_ids:
+                    continue
+                before_count = len(entries)
+                add_entry(score_idx, item)
+                if len(entries) > before_count:
+                    used_frame_ids.add(frame_id)
+                if len(entries) >= count:
+                    break
+
+        return entries
 
     @staticmethod
     def _select_top_crops(visibility_results: Dict[str, Any],

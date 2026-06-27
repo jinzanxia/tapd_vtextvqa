@@ -26,7 +26,7 @@ OUTPUT_JSON="${OUTPUT_JSON:-./results/qwen2_5_vl_7b_evidence_local_global_direct
 
 # Global questions: no SFA, no Scan/Focus/Amplify; sample raw frames and feed them directly to Qwen.
 # Local questions: use the evidence pipeline with retrieval, localization, crop scoring, and final reasoning.
-NUM_SAMPLED_FRAMES="${NUM_SAMPLED_FRAMES:-16}"
+NUM_SAMPLED_FRAMES="${NUM_SAMPLED_FRAMES:-10}"
 TOP_K_FRAMES="${TOP_K_FRAMES:-5}"
 OCR_SCORE_MODE="${OCR_SCORE_MODE:-vlm}"
 REASONING_EVIDENCE_MODE="${REASONING_EVIDENCE_MODE:-both}"
