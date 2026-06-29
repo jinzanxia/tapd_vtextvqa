@@ -78,7 +78,8 @@ class EvidenceMiningPipeline:
                  ocr_score_mode: str = "paddle",
                  reasoning_evidence_mode: str = "both",
                  reasoning_global_frame_count: int = 3,
-                 reasoning_local_crop_count: int = 3):
+                 reasoning_local_crop_count: int = 3,
+                 answer_postprocess_mode: str = "simple"):
         """
         Initialize the evidence mining pipeline.
         
@@ -90,6 +91,7 @@ class EvidenceMiningPipeline:
             reasoning_evidence_mode: "both", "global", or "local" for final reasoning
             reasoning_global_frame_count: Number of retrieved global frames to pass to final reasoning
             reasoning_local_crop_count: Number of ranked local crops to pass to final reasoning
+            answer_postprocess_mode: "simple" matches direct-frame cleanup; "evidence" enables OCR heuristics
         """
         self.model = model
         self.processor = processor
@@ -101,6 +103,10 @@ class EvidenceMiningPipeline:
         self.reasoning_evidence_mode = reasoning_evidence_mode
         self.reasoning_global_frame_count = max(1, int(reasoning_global_frame_count))
         self.reasoning_local_crop_count = max(1, int(reasoning_local_crop_count))
+        if answer_postprocess_mode not in {"simple", "evidence"}:
+            logger.warning(f"Unknown answer postprocess mode '{answer_postprocess_mode}', using simple")
+            answer_postprocess_mode = "simple"
+        self.answer_postprocess_mode = answer_postprocess_mode
         
         # Load model if not provided
         if self.model is None or self.processor is None:
@@ -195,6 +201,33 @@ class EvidenceMiningPipeline:
             localization_results = []
             visibility_results = None
             local_crop_entries = []
+
+            if self.reasoning_evidence_mode == "global":
+                logger.info("Direct-frame ablation: skipping evidence stages for local-route QA")
+                answer = self._stage_5_6_reason(
+                    question,
+                    sampled_frames,
+                    [],
+                    parsed_question=None,
+                    verbose=verbose,
+                    postprocess_local_crop=[],
+                )
+                return {
+                    "success": True,
+                    "answer": answer,
+                    "parsed_question": None,
+                    "question_type": question_type,
+                    "retrieval_results": [],
+                    "localization_results": [],
+                    "visibility_results": None,
+                    "reasoning_input": {
+                        "mode": "direct_frames",
+                        "global_frames": sampled_frames,
+                        "local_crops": [],
+                        "global_frame": sampled_frames[0] if sampled_frames else None,
+                        "local_crop": None,
+                    },
+                }
 
             if question_type == "local":
                 # Stage 1: Question Structural Parsing
@@ -452,12 +485,14 @@ class EvidenceMiningPipeline:
             context=context,
         )
 
-        # Post-process answer to prefer short, extractable content for OCR-like tasks
-        answer_post = self._postprocess_answer(
-            answer,
-            parsed_question,
-            postprocess_local_crop if postprocess_local_crop is not None else local_crop,
-        )
+        if self.answer_postprocess_mode == "evidence":
+            answer_post = self._postprocess_answer(
+                answer,
+                parsed_question,
+                postprocess_local_crop if postprocess_local_crop is not None else local_crop,
+            )
+        else:
+            answer_post = self._simple_postprocess_answer(answer)
         if verbose and answer != answer_post:
             logger.info(f"Post-processed answer: '{answer}' -> '{answer_post}'")
 
@@ -741,6 +776,14 @@ class EvidenceMiningPipeline:
 
         return ans
 
+    @staticmethod
+    def _simple_postprocess_answer(answer: str) -> str:
+        """Match direct-frame answer cleanup without parser-dependent extraction."""
+        ans = (answer or "").replace("Answer:", "").strip()
+        if ans.endswith('.'):
+            ans = ans[:-1].strip()
+        return ans
+
 
 def run_pipeline(question: str,
                 frames: List[Union[np.ndarray, Image.Image]],
@@ -752,6 +795,7 @@ def run_pipeline(question: str,
                 reasoning_evidence_mode: str = "both",
                 reasoning_global_frame_count: int = 3,
                 reasoning_local_crop_count: int = 3,
+                answer_postprocess_mode: str = "simple",
                 verbose: bool = False) -> Dict[str, Any]:
     """
     Run the evidence mining pipeline.
@@ -767,6 +811,7 @@ def run_pipeline(question: str,
         reasoning_evidence_mode: "both", "global", or "local" for final reasoning
         reasoning_global_frame_count: Number of global frames for final reasoning
         reasoning_local_crop_count: Number of local crops for final reasoning
+        answer_postprocess_mode: "simple" matches direct-frame cleanup; "evidence" enables OCR heuristics
         verbose: Print debug information
         
     Returns:
@@ -779,7 +824,8 @@ def run_pipeline(question: str,
         ocr_score_mode=ocr_score_mode,
         reasoning_evidence_mode=reasoning_evidence_mode,
         reasoning_global_frame_count=reasoning_global_frame_count,
-        reasoning_local_crop_count=reasoning_local_crop_count
+        reasoning_local_crop_count=reasoning_local_crop_count,
+        answer_postprocess_mode=answer_postprocess_mode,
     )
     return pipeline.run(
         question,

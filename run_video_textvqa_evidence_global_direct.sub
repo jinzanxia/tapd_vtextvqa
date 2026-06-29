@@ -32,6 +32,7 @@ OCR_SCORE_MODE="${OCR_SCORE_MODE:-vlm}"
 REASONING_EVIDENCE_MODE="${REASONING_EVIDENCE_MODE:-both}"
 NUM_REASONING_GLOBAL_FRAMES="${NUM_REASONING_GLOBAL_FRAMES:-3}"
 NUM_REASONING_LOCAL_CROPS="${NUM_REASONING_LOCAL_CROPS:-3}"
+ANSWER_POSTPROCESS_MODE="${ANSWER_POSTPROCESS_MODE:-simple}"
 
 # Set to 1 when MODEL_NAME is Qwen/Qwen3-VL-8B-Instruct and the container
 # does not already include Qwen3VLForConditionalGeneration.
@@ -76,6 +77,7 @@ echo 'Output: ${OUTPUT_JSON}'
 echo 'Sampled frames: ${NUM_SAMPLED_FRAMES}'
 echo 'Top-K evidence frames: ${TOP_K_FRAMES}'
 echo 'Local evidence mode: ${REASONING_EVIDENCE_MODE}'
+echo 'Answer postprocess mode: ${ANSWER_POSTPROCESS_MODE}'
 
 python ${SCRIPT_PATH} \
     --gt-json ${GT_JSON} \
@@ -92,7 +94,8 @@ python ${SCRIPT_PATH} \
     --global-route direct_frames \
     --reasoning-evidence-mode ${REASONING_EVIDENCE_MODE} \
     --num-reasoning-global-frames ${NUM_REASONING_GLOBAL_FRAMES} \
-    --num-reasoning-local-crops ${NUM_REASONING_LOCAL_CROPS}
+    --num-reasoning-local-crops ${NUM_REASONING_LOCAL_CROPS} \
+    --answer-postprocess-mode ${ANSWER_POSTPROCESS_MODE}
 
 echo '===== FINISHED EVIDENCE GLOBAL-DIRECT INFERENCE ====='
 echo 'Output json: ${OUTPUT_JSON}'

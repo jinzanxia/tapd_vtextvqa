@@ -74,7 +74,7 @@ class QwenReasoner:
                 question,
                 global_frames,
                 [],
-                context or "Global frame context",
+                context,
             )
         elif has_local:
             return self._reason_with_multiple_images(
@@ -104,12 +104,18 @@ class QwenReasoner:
             return "Unable to process - no evidence provided."
 
         try:
-            evidence_note = self._build_evidence_note(len(global_frames), len(local_crops), context)
-            prompt = (
-                f"{evidence_note}\n\n"
-                "Please provide a brief answer based on the images, using as few words as possible. "
-                f"Question: {question}"
-            )
+            if global_frames and not local_crops and not context:
+                prompt = (
+                    "Please provide a brief answer based on the sampled video frames, "
+                    "using as few words as possible. Question: " + question
+                )
+            else:
+                evidence_note = self._build_evidence_note(len(global_frames), len(local_crops), context)
+                prompt = (
+                    f"{evidence_note}\n\n"
+                    "Please provide a brief answer based on the sampled video frames/images, "
+                    f"using as few words as possible. Question: {question}"
+                )
 
             conversation = [
                 {"role": "system", "content": "You are a helpful assistant."},
@@ -127,7 +133,7 @@ class QwenReasoner:
                 add_generation_prompt=True,
             )
 
-            images = [self._ensure_min_vlm_size(image) for image in all_images]
+            images = all_images
 
             inputs = self.processor(
                 text=[text],

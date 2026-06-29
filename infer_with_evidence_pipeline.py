@@ -350,6 +350,12 @@ def get_parser():
         default=3,
         help="Number of ranked local crops passed to final reasoning (default: 3)"
     )
+    parser.add_argument(
+        "--answer-postprocess-mode",
+        choices=["simple", "evidence"],
+        default="simple",
+        help="Answer cleanup mode: simple matches direct-frame baseline; evidence enables parser/OCR heuristics (default: simple)"
+    )
     
     # Compatibility arguments (for baseline modes)
     parser.add_argument("--no-ocr-text", action="store_true", default=False)
@@ -442,7 +448,8 @@ def main():
                 ocr_score_mode=args.ocr_score_mode,
                 reasoning_evidence_mode=args.reasoning_evidence_mode,
                 reasoning_global_frame_count=args.num_reasoning_global_frames,
-                reasoning_local_crop_count=args.num_reasoning_local_crops
+                reasoning_local_crop_count=args.num_reasoning_local_crops,
+                answer_postprocess_mode=args.answer_postprocess_mode
             )
             logger.info("Pipeline initialized\n")
         except Exception as e:
