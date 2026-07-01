@@ -79,7 +79,8 @@ class EvidenceMiningPipeline:
                  reasoning_evidence_mode: str = "both",
                  reasoning_global_frame_count: int = 3,
                  reasoning_local_crop_count: int = 3,
-                 answer_postprocess_mode: str = "simple"):
+                 answer_postprocess_mode: str = "simple",
+                 crop_insertion_mode: str = "replace"):
         """
         Initialize the evidence mining pipeline.
         
@@ -92,6 +93,7 @@ class EvidenceMiningPipeline:
             reasoning_global_frame_count: Number of retrieved global frames to pass to final reasoning
             reasoning_local_crop_count: Number of ranked local crops to pass to final reasoning
             answer_postprocess_mode: "simple" matches direct-frame cleanup; "evidence" enables OCR heuristics
+            crop_insertion_mode: "replace", "append", or "interleave" for using selected crops with sampled frames
         """
         self.model = model
         self.processor = processor
@@ -107,6 +109,10 @@ class EvidenceMiningPipeline:
             logger.warning(f"Unknown answer postprocess mode '{answer_postprocess_mode}', using simple")
             answer_postprocess_mode = "simple"
         self.answer_postprocess_mode = answer_postprocess_mode
+        if crop_insertion_mode not in {"replace", "append", "interleave"}:
+            logger.warning(f"Unknown crop insertion mode '{crop_insertion_mode}', using replace")
+            crop_insertion_mode = "replace"
+        self.crop_insertion_mode = crop_insertion_mode
         
         # Load model if not provided
         if self.model is None or self.processor is None:
@@ -326,14 +332,15 @@ class EvidenceMiningPipeline:
                     reasoning_local_crops = []
                     actual_reasoning_mode = "direct_frames_fallback"
             else:
-                reasoning_global_frames = self._build_crop_replaced_frame_sequence(
+                reasoning_global_frames = self._build_crop_inserted_frame_sequence(
                     global_frames,
                     local_crop_entries,
-                    enable_replacement=self.reasoning_evidence_mode != "global",
+                    insertion_mode=self.crop_insertion_mode,
+                    enable_crops=self.reasoning_evidence_mode != "global",
                 )
                 reasoning_local_crops = []
                 actual_reasoning_mode = (
-                    "crop_replaced_direct_frames"
+                    f"crop_{self.crop_insertion_mode}_direct_frames"
                     if local_crop_entries and self.reasoning_evidence_mode != "global"
                     else "direct_frames"
                 )
@@ -345,9 +352,8 @@ class EvidenceMiningPipeline:
                 verbose,
                 postprocess_local_crop=local_crops,
                 context=(
-                    "The images follow the uniformly sampled video-frame order. "
-                    "Some positions may be zoomed local crop replacements for their original frames."
-                    if actual_reasoning_mode == "crop_replaced_direct_frames"
+                    self._build_crop_insertion_context(actual_reasoning_mode)
+                    if local_crop_entries and self.reasoning_evidence_mode != "global"
                     else ""
                 ),
             )
@@ -534,20 +540,23 @@ class EvidenceMiningPipeline:
         return frames_pil
 
     @staticmethod
-    def _build_crop_replaced_frame_sequence(frames: List[Image.Image],
+    def _build_crop_inserted_frame_sequence(frames: List[Image.Image],
                                             crop_entries: List[Dict[str, Any]],
-                                            enable_replacement: bool = True) -> List[Image.Image]:
+                                            insertion_mode: str = "replace",
+                                            enable_crops: bool = True) -> List[Image.Image]:
         """
-        Return the full sampled-frame sequence, replacing selected frame positions with crops.
+        Return sampled frames with selected crops inserted according to the ablation mode.
 
-        This keeps the final Qwen input aligned with direct-frame inference: same sampling
-        method, same number of images, with local evidence substituted in-place.
+        Modes:
+        - replace: keep the same image count; selected frame positions become crops.
+        - append: keep all sampled frames, then append selected crops in score order.
+        - interleave: keep all sampled frames and insert each crop after its source frame.
         """
         reasoning_frames = list(frames)
-        if not enable_replacement:
+        if not enable_crops:
             return reasoning_frames
 
-        replaced_frame_ids = set()
+        normalized_entries = []
         for entry in crop_entries:
             frame_id = entry.get("frame_id")
             crop = entry.get("crop")
@@ -555,17 +564,50 @@ class EvidenceMiningPipeline:
                 frame_id = int(frame_id) if frame_id is not None else None
             except (TypeError, ValueError):
                 frame_id = None
-            if (
-                crop is None
-                or frame_id is None
-                or frame_id in replaced_frame_ids
-                or frame_id < 0
-                or frame_id >= len(reasoning_frames)
-            ):
+            if crop is None or frame_id is None or frame_id < 0 or frame_id >= len(frames):
                 continue
-            reasoning_frames[frame_id] = crop
+            normalized_entries.append({**entry, "frame_id": frame_id, "crop": crop})
+
+        if insertion_mode == "append":
+            return reasoning_frames + [entry["crop"] for entry in normalized_entries]
+
+        if insertion_mode == "interleave":
+            crops_by_frame = {}
+            for entry in normalized_entries:
+                crops_by_frame.setdefault(entry["frame_id"], []).append(entry["crop"])
+
+            interleaved = []
+            for frame_id, frame in enumerate(frames):
+                interleaved.append(frame)
+                interleaved.extend(crops_by_frame.get(frame_id, []))
+            return interleaved
+
+        replaced_frame_ids = set()
+        for entry in normalized_entries:
+            frame_id = entry["frame_id"]
+            if frame_id in replaced_frame_ids:
+                continue
+            reasoning_frames[frame_id] = entry["crop"]
             replaced_frame_ids.add(frame_id)
         return reasoning_frames
+
+    @staticmethod
+    def _build_crop_insertion_context(reasoning_mode: str) -> str:
+        """Describe how local crops are arranged with sampled frames."""
+        if reasoning_mode == "crop_append_direct_frames":
+            return (
+                "The first images follow the uniformly sampled video-frame order. "
+                "The final image(s) are zoomed local crops from selected frames."
+            )
+        if reasoning_mode == "crop_interleave_direct_frames":
+            return (
+                "The images follow the uniformly sampled video-frame order, with each zoomed local crop "
+                "placed immediately after its source frame."
+            )
+        return (
+            "The images follow the uniformly sampled video-frame order. "
+            "Some positions may be zoomed local crop replacements for their original frames."
+        )
 
     @staticmethod
     def _select_top_crop_entries(visibility_results: Dict[str, Any],
@@ -796,6 +838,7 @@ def run_pipeline(question: str,
                 reasoning_global_frame_count: int = 3,
                 reasoning_local_crop_count: int = 3,
                 answer_postprocess_mode: str = "simple",
+                crop_insertion_mode: str = "replace",
                 verbose: bool = False) -> Dict[str, Any]:
     """
     Run the evidence mining pipeline.
@@ -812,6 +855,7 @@ def run_pipeline(question: str,
         reasoning_global_frame_count: Number of global frames for final reasoning
         reasoning_local_crop_count: Number of local crops for final reasoning
         answer_postprocess_mode: "simple" matches direct-frame cleanup; "evidence" enables OCR heuristics
+        crop_insertion_mode: "replace", "append", or "interleave" for crop-frame fusion
         verbose: Print debug information
         
     Returns:
@@ -826,6 +870,7 @@ def run_pipeline(question: str,
         reasoning_global_frame_count=reasoning_global_frame_count,
         reasoning_local_crop_count=reasoning_local_crop_count,
         answer_postprocess_mode=answer_postprocess_mode,
+        crop_insertion_mode=crop_insertion_mode,
     )
     return pipeline.run(
         question,

@@ -356,6 +356,12 @@ def get_parser():
         default="simple",
         help="Answer cleanup mode: simple matches direct-frame baseline; evidence enables parser/OCR heuristics (default: simple)"
     )
+    parser.add_argument(
+        "--crop-insertion-mode",
+        choices=["replace", "append", "interleave"],
+        default="replace",
+        help="How selected crops are used with sampled frames: replace source frame, append after all frames, or interleave after source frame (default: replace)"
+    )
     
     # Compatibility arguments (for baseline modes)
     parser.add_argument("--no-ocr-text", action="store_true", default=False)
@@ -449,7 +455,8 @@ def main():
                 reasoning_evidence_mode=args.reasoning_evidence_mode,
                 reasoning_global_frame_count=args.num_reasoning_global_frames,
                 reasoning_local_crop_count=args.num_reasoning_local_crops,
-                answer_postprocess_mode=args.answer_postprocess_mode
+                answer_postprocess_mode=args.answer_postprocess_mode,
+                crop_insertion_mode=args.crop_insertion_mode
             )
             logger.info("Pipeline initialized\n")
         except Exception as e:
