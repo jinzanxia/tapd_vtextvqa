@@ -368,6 +368,12 @@ def get_parser():
         default="retrieved",
         help="Evidence candidate frames for localization: retrieved top-k frames or all sampled frames (default: retrieved)"
     )
+    parser.add_argument(
+        "--localization-prompt-mode",
+        choices=["structured", "raw_question", "ocr_focused"],
+        default="structured",
+        help="Prompt used for region localization: parsed structured target, raw question, or OCR-focused evidence (default: structured)"
+    )
     
     # Compatibility arguments (for baseline modes)
     parser.add_argument("--no-ocr-text", action="store_true", default=False)
@@ -463,7 +469,8 @@ def main():
                 reasoning_local_crop_count=args.num_reasoning_local_crops,
                 answer_postprocess_mode=args.answer_postprocess_mode,
                 crop_insertion_mode=args.crop_insertion_mode,
-                evidence_frame_source=args.evidence_frame_source
+                evidence_frame_source=args.evidence_frame_source,
+                localization_prompt_mode=args.localization_prompt_mode
             )
             logger.info("Pipeline initialized\n")
         except Exception as e:

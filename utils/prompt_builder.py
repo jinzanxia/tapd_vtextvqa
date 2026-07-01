@@ -68,6 +68,34 @@ If the target is text or appears in a row/table, include nearby text or numbers 
 JSON:"""
 
 
+def build_raw_question_localization_prompt(question: str) -> str:
+    """Build localization prompt directly from the original question."""
+    return f"""Locate the visual evidence region needed to answer this question:
+
+Question: {question}
+
+Return ONLY valid JSON with one bounding box in pixel coordinates:
+{{"box": [x1, y1, x2, y2], "confidence": <float 0-1>}}
+
+Include the object, text, number, sign, label, or nearby context that is most likely needed to answer.
+
+JSON:"""
+
+
+def build_ocr_focused_localization_prompt(question: str) -> str:
+    """Build localization prompt focused on readable text/number evidence."""
+    return f"""Locate the clearest readable text or number region that could answer this question:
+
+Question: {question}
+
+Prefer signs, labels, logos, captions, printed words, prices, IDs, scores, or numbers. Include nearby context if it helps identify the correct text.
+
+Return ONLY valid JSON with one bounding box in pixel coordinates:
+{{"box": [x1, y1, x2, y2], "confidence": <float 0-1>}}
+
+JSON:"""
+
+
 def build_ocr_visibility_prompt(parsed_question: Dict[str, str]) -> str:
     """Build prompt for OCR readability scoring."""
     target = parsed_question.get("target", "target")

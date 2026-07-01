@@ -25,6 +25,8 @@ from reasoning.qwen_reasoning import run_vlm_reasoning
 from utils.prompt_builder import (
     build_frame_retrieval_prompt,
     build_region_localization_prompt,
+    build_raw_question_localization_prompt,
+    build_ocr_focused_localization_prompt,
     build_ocr_visibility_prompt,
     build_crop_localization_scoring_prompt,
 )
@@ -81,7 +83,8 @@ class EvidenceMiningPipeline:
                  reasoning_local_crop_count: int = 3,
                  answer_postprocess_mode: str = "simple",
                  crop_insertion_mode: str = "replace",
-                 evidence_frame_source: str = "retrieved"):
+                 evidence_frame_source: str = "retrieved",
+                 localization_prompt_mode: str = "structured"):
         """
         Initialize the evidence mining pipeline.
         
@@ -96,6 +99,7 @@ class EvidenceMiningPipeline:
             answer_postprocess_mode: "simple" matches direct-frame cleanup; "evidence" enables OCR heuristics
             crop_insertion_mode: "replace", "append", or "interleave" for using selected crops with sampled frames
             evidence_frame_source: "retrieved" uses top-k frame retrieval; "all" localizes all sampled frames
+            localization_prompt_mode: "structured", "raw_question", or "ocr_focused"
         """
         self.model = model
         self.processor = processor
@@ -119,6 +123,10 @@ class EvidenceMiningPipeline:
             logger.warning(f"Unknown evidence frame source '{evidence_frame_source}', using retrieved")
             evidence_frame_source = "retrieved"
         self.evidence_frame_source = evidence_frame_source
+        if localization_prompt_mode not in {"structured", "raw_question", "ocr_focused"}:
+            logger.warning(f"Unknown localization prompt mode '{localization_prompt_mode}', using structured")
+            localization_prompt_mode = "structured"
+        self.localization_prompt_mode = localization_prompt_mode
         
         # Load model if not provided
         if self.model is None or self.processor is None:
@@ -235,6 +243,7 @@ class EvidenceMiningPipeline:
                     "reasoning_input": {
                         "mode": "direct_frames",
                         "evidence_frame_source": "none",
+                        "localization_prompt_mode": "none",
                         "requested_top_k_frames": top_k_frames,
                         "candidate_frame_count": 0,
                         "global_frames": sampled_frames,
@@ -299,6 +308,7 @@ class EvidenceMiningPipeline:
                     "reasoning_input": {
                         "mode": "global",
                         "evidence_frame_source": self.evidence_frame_source,
+                        "localization_prompt_mode": self.localization_prompt_mode,
                         "requested_top_k_frames": top_k_frames,
                         "candidate_frame_count": len(retrieval_results),
                         "global_frames": global_frames,
@@ -310,7 +320,7 @@ class EvidenceMiningPipeline:
 
             # Stage 3: Target Region Localization
             logger.info("Stage 3: Region Localization")
-            region_prompt = build_region_localization_prompt(parsed_question)
+            region_prompt = self._build_localization_prompt(question, parsed_question)
             localization_results = self._stage_3_localize_regions(
                 retrieval_results, region_prompt, verbose
             )
@@ -397,6 +407,7 @@ class EvidenceMiningPipeline:
                 "reasoning_input": {
                     "mode": actual_reasoning_mode,
                     "evidence_frame_source": self.evidence_frame_source,
+                    "localization_prompt_mode": self.localization_prompt_mode,
                     "requested_top_k_frames": top_k_frames,
                     "candidate_frame_count": len(retrieval_results),
                     "global_frames": reasoning_global_frames,
@@ -427,6 +438,16 @@ class EvidenceMiningPipeline:
             logger.info(f"Parsed question: {result}")
         
         return result
+
+    def _build_localization_prompt(self,
+                                   question: str,
+                                   parsed_question: Optional[Dict[str, Any]]) -> str:
+        """Build the Stage 3 localization prompt for the selected ablation mode."""
+        if self.localization_prompt_mode == "raw_question":
+            return build_raw_question_localization_prompt(question)
+        if self.localization_prompt_mode == "ocr_focused":
+            return build_ocr_focused_localization_prompt(question)
+        return build_region_localization_prompt(parsed_question or {})
     
     def _stage_2_retrieve_frames(self,
                                  frames: List[Union[np.ndarray, Image.Image]],
@@ -877,6 +898,7 @@ def run_pipeline(question: str,
                 answer_postprocess_mode: str = "simple",
                 crop_insertion_mode: str = "replace",
                 evidence_frame_source: str = "retrieved",
+                localization_prompt_mode: str = "structured",
                 verbose: bool = False) -> Dict[str, Any]:
     """
     Run the evidence mining pipeline.
@@ -895,6 +917,7 @@ def run_pipeline(question: str,
         answer_postprocess_mode: "simple" matches direct-frame cleanup; "evidence" enables OCR heuristics
         crop_insertion_mode: "replace", "append", or "interleave" for crop-frame fusion
         evidence_frame_source: "retrieved" uses top-k frame retrieval; "all" localizes all sampled frames
+        localization_prompt_mode: "structured", "raw_question", or "ocr_focused"
         verbose: Print debug information
         
     Returns:
@@ -911,6 +934,7 @@ def run_pipeline(question: str,
         answer_postprocess_mode=answer_postprocess_mode,
         crop_insertion_mode=crop_insertion_mode,
         evidence_frame_source=evidence_frame_source,
+        localization_prompt_mode=localization_prompt_mode,
     )
     return pipeline.run(
         question,
