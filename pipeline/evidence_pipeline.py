@@ -80,7 +80,8 @@ class EvidenceMiningPipeline:
                  reasoning_global_frame_count: int = 3,
                  reasoning_local_crop_count: int = 3,
                  answer_postprocess_mode: str = "simple",
-                 crop_insertion_mode: str = "replace"):
+                 crop_insertion_mode: str = "replace",
+                 evidence_frame_source: str = "retrieved"):
         """
         Initialize the evidence mining pipeline.
         
@@ -94,6 +95,7 @@ class EvidenceMiningPipeline:
             reasoning_local_crop_count: Number of ranked local crops to pass to final reasoning
             answer_postprocess_mode: "simple" matches direct-frame cleanup; "evidence" enables OCR heuristics
             crop_insertion_mode: "replace", "append", or "interleave" for using selected crops with sampled frames
+            evidence_frame_source: "retrieved" uses top-k frame retrieval; "all" localizes all sampled frames
         """
         self.model = model
         self.processor = processor
@@ -113,6 +115,10 @@ class EvidenceMiningPipeline:
             logger.warning(f"Unknown crop insertion mode '{crop_insertion_mode}', using replace")
             crop_insertion_mode = "replace"
         self.crop_insertion_mode = crop_insertion_mode
+        if evidence_frame_source not in {"retrieved", "all"}:
+            logger.warning(f"Unknown evidence frame source '{evidence_frame_source}', using retrieved")
+            evidence_frame_source = "retrieved"
+        self.evidence_frame_source = evidence_frame_source
         
         # Load model if not provided
         if self.model is None or self.processor is None:
@@ -228,6 +234,9 @@ class EvidenceMiningPipeline:
                     "visibility_results": None,
                     "reasoning_input": {
                         "mode": "direct_frames",
+                        "evidence_frame_source": "none",
+                        "requested_top_k_frames": top_k_frames,
+                        "candidate_frame_count": 0,
                         "global_frames": sampled_frames,
                         "local_crops": [],
                         "global_frame": sampled_frames[0] if sampled_frames else None,
@@ -245,9 +254,19 @@ class EvidenceMiningPipeline:
                 retrieval_prompt = question
 
             # Stage 2: Frame-Level Relevant Frame Retrieval / global frame selection
-            logger.info("Stage 2: Frame Retrieval")
-            retrieval_results = self._stage_2_retrieve_frames(
-                sampled_frames, retrieval_prompt, top_k_frames, verbose
+            if self.evidence_frame_source == "all":
+                logger.info("Stage 2: Frame Retrieval skipped; using all sampled frames for evidence")
+                retrieval_results = self._build_all_frame_results(sampled_frames)
+            else:
+                logger.info("Stage 2: Frame Retrieval")
+                retrieval_results = self._stage_2_retrieve_frames(
+                    sampled_frames, retrieval_prompt, top_k_frames, verbose
+                )
+            logger.info(
+                "Evidence frame source: %s; requested top-k: %s; candidate frames used: %s",
+                self.evidence_frame_source,
+                top_k_frames,
+                len(retrieval_results),
             )
             
             if not retrieval_results:
@@ -279,6 +298,9 @@ class EvidenceMiningPipeline:
                     "visibility_results": visibility_results,
                     "reasoning_input": {
                         "mode": "global",
+                        "evidence_frame_source": self.evidence_frame_source,
+                        "requested_top_k_frames": top_k_frames,
+                        "candidate_frame_count": len(retrieval_results),
                         "global_frames": global_frames,
                         "local_crops": [],
                         "global_frame": global_frames[0] if global_frames else None,
@@ -374,6 +396,9 @@ class EvidenceMiningPipeline:
                 },
                 "reasoning_input": {
                     "mode": actual_reasoning_mode,
+                    "evidence_frame_source": self.evidence_frame_source,
+                    "requested_top_k_frames": top_k_frames,
+                    "candidate_frame_count": len(retrieval_results),
                     "global_frames": reasoning_global_frames,
                     "local_crops": reasoning_local_crops,
                     "global_frame": reasoning_global_frames[0] if reasoning_global_frames else None,
@@ -450,6 +475,18 @@ class EvidenceMiningPipeline:
             logger.info(f"Localized {len(results)} candidate regions")
         
         return results
+
+    @staticmethod
+    def _build_all_frame_results(frames: List[Image.Image]) -> List[Dict[str, Any]]:
+        """Use every sampled frame as an evidence candidate without VLM retrieval scoring."""
+        return [
+            {
+                "frame_id": frame_id,
+                "frame": frame,
+                "score": 1.0,
+            }
+            for frame_id, frame in enumerate(frames)
+        ]
     
     def _stage_4_score_visibility(self,
                                   localization_results: List[Dict[str, Any]],
@@ -839,6 +876,7 @@ def run_pipeline(question: str,
                 reasoning_local_crop_count: int = 3,
                 answer_postprocess_mode: str = "simple",
                 crop_insertion_mode: str = "replace",
+                evidence_frame_source: str = "retrieved",
                 verbose: bool = False) -> Dict[str, Any]:
     """
     Run the evidence mining pipeline.
@@ -856,6 +894,7 @@ def run_pipeline(question: str,
         reasoning_local_crop_count: Number of local crops for final reasoning
         answer_postprocess_mode: "simple" matches direct-frame cleanup; "evidence" enables OCR heuristics
         crop_insertion_mode: "replace", "append", or "interleave" for crop-frame fusion
+        evidence_frame_source: "retrieved" uses top-k frame retrieval; "all" localizes all sampled frames
         verbose: Print debug information
         
     Returns:
@@ -871,6 +910,7 @@ def run_pipeline(question: str,
         reasoning_local_crop_count=reasoning_local_crop_count,
         answer_postprocess_mode=answer_postprocess_mode,
         crop_insertion_mode=crop_insertion_mode,
+        evidence_frame_source=evidence_frame_source,
     )
     return pipeline.run(
         question,

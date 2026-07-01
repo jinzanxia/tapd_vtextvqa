@@ -34,6 +34,7 @@ NUM_REASONING_GLOBAL_FRAMES="${NUM_REASONING_GLOBAL_FRAMES:-3}"
 NUM_REASONING_LOCAL_CROPS="${NUM_REASONING_LOCAL_CROPS:-3}"
 ANSWER_POSTPROCESS_MODE="${ANSWER_POSTPROCESS_MODE:-simple}"
 CROP_INSERTION_MODE="${CROP_INSERTION_MODE:-replace}"
+EVIDENCE_FRAME_SOURCE="${EVIDENCE_FRAME_SOURCE:-retrieved}"
 
 # Set to 1 when MODEL_NAME is Qwen/Qwen3-VL-8B-Instruct and the container
 # does not already include Qwen3VLForConditionalGeneration.
@@ -80,6 +81,7 @@ echo 'Top-K evidence frames: ${TOP_K_FRAMES}'
 echo 'Local evidence mode: ${REASONING_EVIDENCE_MODE}'
 echo 'Answer postprocess mode: ${ANSWER_POSTPROCESS_MODE}'
 echo 'Crop insertion mode: ${CROP_INSERTION_MODE}'
+echo 'Evidence frame source: ${EVIDENCE_FRAME_SOURCE}'
 
 python ${SCRIPT_PATH} \
     --gt-json ${GT_JSON} \
@@ -98,7 +100,8 @@ python ${SCRIPT_PATH} \
     --num-reasoning-global-frames ${NUM_REASONING_GLOBAL_FRAMES} \
     --num-reasoning-local-crops ${NUM_REASONING_LOCAL_CROPS} \
     --answer-postprocess-mode ${ANSWER_POSTPROCESS_MODE} \
-    --crop-insertion-mode ${CROP_INSERTION_MODE}
+    --crop-insertion-mode ${CROP_INSERTION_MODE} \
+    --evidence-frame-source ${EVIDENCE_FRAME_SOURCE}
 
 echo '===== FINISHED EVIDENCE GLOBAL-DIRECT INFERENCE ====='
 echo 'Output json: ${OUTPUT_JSON}'

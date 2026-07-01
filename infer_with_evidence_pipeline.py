@@ -362,6 +362,12 @@ def get_parser():
         default="replace",
         help="How selected crops are used with sampled frames: replace source frame, append after all frames, or interleave after source frame (default: replace)"
     )
+    parser.add_argument(
+        "--evidence-frame-source",
+        choices=["retrieved", "all"],
+        default="retrieved",
+        help="Evidence candidate frames for localization: retrieved top-k frames or all sampled frames (default: retrieved)"
+    )
     
     # Compatibility arguments (for baseline modes)
     parser.add_argument("--no-ocr-text", action="store_true", default=False)
@@ -456,7 +462,8 @@ def main():
                 reasoning_global_frame_count=args.num_reasoning_global_frames,
                 reasoning_local_crop_count=args.num_reasoning_local_crops,
                 answer_postprocess_mode=args.answer_postprocess_mode,
-                crop_insertion_mode=args.crop_insertion_mode
+                crop_insertion_mode=args.crop_insertion_mode,
+                evidence_frame_source=args.evidence_frame_source
             )
             logger.info("Pipeline initialized\n")
         except Exception as e:
