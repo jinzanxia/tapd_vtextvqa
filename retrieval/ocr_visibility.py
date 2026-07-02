@@ -32,7 +32,9 @@ class OCRVisibilityScorer:
                  alpha: float = 0.4,
                  beta: float = 0.3,
                  gamma: float = 0.3,
-                 ocr_score_mode: str = "paddle"):
+                 ocr_score_mode: str = "paddle",
+                 crop_expand_ratio: Optional[float] = None,
+                 crop_size_ratio: Optional[float] = None):
         """
         Initialize OCR visibility scorer.
         
@@ -44,6 +46,8 @@ class OCRVisibilityScorer:
             beta: Weight for sharpness (Laplacian variance)
             gamma: Weight for VLM visibility score
             ocr_score_mode: "paddle" for PaddleOCR confidence or "vlm" for VLM readability
+            crop_expand_ratio: Ratio for expanding detected bbox before crop extraction
+            crop_size_ratio: Fixed fraction of frame side length for crop extraction
         """
         self.model = model
         self.processor = processor
@@ -55,6 +59,35 @@ class OCRVisibilityScorer:
             logger.warning(f"Unknown OCR score mode '{ocr_score_mode}', using PaddleOCR")
             ocr_score_mode = "paddle"
         self.ocr_score_mode = ocr_score_mode
+
+        if crop_expand_ratio is not None:
+            try:
+                crop_expand_ratio = float(crop_expand_ratio)
+                if crop_expand_ratio <= 0:
+                    raise ValueError
+            except (TypeError, ValueError):
+                logger.warning(
+                    f"Invalid crop_expand_ratio '{crop_expand_ratio}', disabling crop expansion"
+                )
+                crop_expand_ratio = None
+        self.crop_expand_ratio = crop_expand_ratio
+
+        if crop_size_ratio is not None:
+            try:
+                crop_size_ratio = float(crop_size_ratio)
+                if not (0.0 < crop_size_ratio <= 1.0):
+                    raise ValueError
+            except (TypeError, ValueError):
+                logger.warning(
+                    f"Invalid crop_size_ratio '{crop_size_ratio}', disabling fixed crop sizing"
+                )
+                crop_size_ratio = None
+        self.crop_size_ratio = crop_size_ratio
+
+        if self.crop_expand_ratio is not None and self.crop_size_ratio is not None:
+            logger.warning(
+                "Both crop_expand_ratio and crop_size_ratio set; fixed-size crop ratio will take precedence"
+            )
         
         # PaddleOCR is expensive to initialize; load it only for the Paddle OCR mode.
         self.ocr_model = self._get_shared_ocr_model() if self.ocr_score_mode == "paddle" else None
@@ -224,8 +257,15 @@ class OCRVisibilityScorer:
                 logger.warning(f"Invalid crop coordinates: ({x1}, {y1}, {x2}, {y2})")
                 return None
 
-            x1, y1, x2, y2 = self._expand_bbox_adaptively(
-                x1, y1, x2, y2, frame.width, frame.height
+            x1, y1, x2, y2 = self._expand_bbox(
+                x1,
+                y1,
+                x2,
+                y2,
+                frame.width,
+                frame.height,
+                expand_ratio=self.crop_expand_ratio,
+                size_ratio=self.crop_size_ratio,
             )
             
             # Extract crop
@@ -236,6 +276,52 @@ class OCRVisibilityScorer:
         except Exception as e:
             logger.error(f"Error extracting crop: {e}")
             return None
+
+    @staticmethod
+    def _expand_bbox(x1: int,
+                     y1: int,
+                     x2: int,
+                     y2: int,
+                     frame_w: int,
+                     frame_h: int,
+                     expand_ratio: Optional[float] = None,
+                     size_ratio: Optional[float] = None) -> tuple:
+        """Expand or resize a bbox according to configured crop ablation settings."""
+        if size_ratio is not None:
+            # Force a square-like crop based on the frame size ratio.
+            target_side = int(round(min(frame_w, frame_h) * size_ratio))
+            cx = (x1 + x2) // 2
+            cy = (y1 + y2) // 2
+            new_x1 = max(0, cx - target_side // 2)
+            new_y1 = max(0, cy - target_side // 2)
+            new_x2 = min(frame_w, new_x1 + target_side)
+            new_y2 = min(frame_h, new_y1 + target_side)
+
+            new_x1 = max(0, new_x2 - target_side)
+            new_y1 = max(0, new_y2 - target_side)
+            return new_x1, new_y1, new_x2, new_y2
+
+        if expand_ratio is None:
+            return OCRVisibilityScorer._expand_bbox_adaptively(
+                x1, y1, x2, y2, frame_w, frame_h
+            )
+
+        box_w = x2 - x1
+        box_h = y2 - y1
+        target_w = int(round(box_w * expand_ratio))
+        target_h = int(round(box_h * expand_ratio))
+
+        cx = (x1 + x2) // 2
+        cy = (y1 + y2) // 2
+
+        new_x1 = max(0, cx - target_w // 2)
+        new_y1 = max(0, cy - target_h // 2)
+        new_x2 = min(frame_w, new_x1 + target_w)
+        new_y2 = min(frame_h, new_y1 + target_h)
+
+        new_x1 = max(0, new_x2 - target_w)
+        new_y1 = max(0, new_y2 - target_h)
+        return new_x1, new_y1, new_x2, new_y2
 
     @staticmethod
     def _expand_bbox_adaptively(x1: int,
@@ -619,7 +705,9 @@ def score_crop_visibility(candidate_regions: List[Dict[str, Any]],
                          alpha: float = 0.4,
                          beta: float = 0.3,
                          gamma: float = 0.3,
-                         ocr_score_mode: str = "paddle") -> Dict[str, Any]:
+                         ocr_score_mode: str = "paddle",
+                         crop_expand_ratio: Optional[float] = None,
+                         crop_size_ratio: Optional[float] = None) -> Dict[str, Any]:
     """
     Score crop visibility and select best OCR crop.
     
@@ -645,6 +733,8 @@ def score_crop_visibility(candidate_regions: List[Dict[str, Any]],
         alpha=alpha,
         beta=beta,
         gamma=gamma,
-        ocr_score_mode=ocr_score_mode
+        ocr_score_mode=ocr_score_mode,
+        crop_expand_ratio=crop_expand_ratio,
+        crop_size_ratio=crop_size_ratio,
     )
     return scorer.score_crops(candidate_regions, ocr_prompt, crop_localization_prompt)

@@ -363,6 +363,18 @@ def get_parser():
         help="How selected crops are used with sampled frames: replace source frame, append after all frames, or interleave after source frame (default: replace)"
     )
     parser.add_argument(
+        "--crop-expand-ratio",
+        type=float,
+        default=None,
+        help="Expand detected crop bboxes by this ratio before extraction, e.g. 1.3, 2.0, 3.0"
+    )
+    parser.add_argument(
+        "--crop-size-ratio",
+        type=float,
+        default=None,
+        help="Force crop size to this fraction of the full frame side length, e.g. 0.4, 0.6, 0.8"
+    )
+    parser.add_argument(
         "--evidence-frame-source",
         choices=["retrieved", "all"],
         default="retrieved",
@@ -469,6 +481,8 @@ def main():
                 reasoning_local_crop_count=args.num_reasoning_local_crops,
                 answer_postprocess_mode=args.answer_postprocess_mode,
                 crop_insertion_mode=args.crop_insertion_mode,
+                crop_expand_ratio=args.crop_expand_ratio,
+                crop_size_ratio=args.crop_size_ratio,
                 evidence_frame_source=args.evidence_frame_source,
                 localization_prompt_mode=args.localization_prompt_mode
             )

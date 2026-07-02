@@ -1,13 +1,14 @@
 #!/bin/bash
-#SBATCH --job-name=qwen_evidence_global_direct
+#SBATCH --job-name=qwen_evidence_crop_size
 #SBATCH --partition=a100
 #SBATCH --gpus=1
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --mem=80G
 #SBATCH --time=72:00:00
-#SBATCH -o ./logs/qwen_evidence_global_direct.%N.%j.out
-#SBATCH -e ./logs/qwen_evidence_global_direct.%N.%j.err
+#SBATCH --array=0-4
+#SBATCH -o ./logs/qwen_evidence_crop_size_%a.%N.%j.out
+#SBATCH -e ./logs/qwen_evidence_crop_size_%a.%N.%j.err
 
 set -euo pipefail
 
@@ -22,10 +23,8 @@ VTS_CONFIG="./GoMatching/configs/GoMatching_PP_BOVText_vit.yaml"
 
 MODEL_NAME="${MODEL_NAME:-Qwen/Qwen2.5-VL-7B-Instruct}"
 ADAPTER_PATH="${ADAPTER_PATH:-}"
-OUTPUT_JSON="${OUTPUT_JSON:-./results/qwen2_5_vl_7b_evidence_local_global_direct_val.json}"
+OUTPUT_JSON="${OUTPUT_JSON:-./results/qwen2_5_vl_7b_evidence_local_global_direct_crop_size_ablation.json}"
 
-# Global questions: no SFA, no Scan/Focus/Amplify; sample raw frames and feed them directly to Qwen.
-# Local questions: use the evidence pipeline with retrieval, localization, crop scoring, and final reasoning.
 NUM_SAMPLED_FRAMES="${NUM_SAMPLED_FRAMES:-10}"
 TOP_K_FRAMES="${TOP_K_FRAMES:-5}"
 OCR_SCORE_MODE="${OCR_SCORE_MODE:-vlm}"
@@ -34,13 +33,10 @@ NUM_REASONING_GLOBAL_FRAMES="${NUM_REASONING_GLOBAL_FRAMES:-3}"
 NUM_REASONING_LOCAL_CROPS="${NUM_REASONING_LOCAL_CROPS:-3}"
 ANSWER_POSTPROCESS_MODE="${ANSWER_POSTPROCESS_MODE:-simple}"
 CROP_INSERTION_MODE="${CROP_INSERTION_MODE:-replace}"
-CROP_EXPAND="${CROP_EXPAND:-}"
+CROP_EXPAND=""
 CROP_SIZE_RATIO="${CROP_SIZE_RATIO:-}"
 EVIDENCE_FRAME_SOURCE="${EVIDENCE_FRAME_SOURCE:-retrieved}"
 LOCALIZATION_PROMPT_MODE="${LOCALIZATION_PROMPT_MODE:-structured}"
-
-# Set to 1 when MODEL_NAME is Qwen/Qwen3-VL-8B-Instruct and the container
-# does not already include Qwen3VLForConditionalGeneration.
 INSTALL_QWEN3_TRANSFORMERS="${INSTALL_QWEN3_TRANSFORMERS:-0}"
 
 mkdir -p ./logs ./results
@@ -60,6 +56,17 @@ done
 
 test -d "${VIDEO_DIR}" || { echo "Missing video dir: ${VIDEO_DIR}"; exit 1; }
 
+SIZE_RATIOS=(0.4 0.6 0.8)
+CROP_SIZE_RATIO="${SIZE_RATIOS[${SLURM_ARRAY_TASK_ID}]}"
+OUTPUT_JSON="./results/qwen2_5_vl_7b_evidence_local_global_direct_crop_size_${CROP_SIZE_RATIO}.json"
+
+echo "=========================================="
+echo "Crop size ablation task: ${SLURM_ARRAY_TASK_ID}"
+echo "Crop size ratio: ${CROP_SIZE_RATIO}"
+echo "Crop expand ratio: ${CROP_EXPAND}"
+echo "Output: ${OUTPUT_JSON}"
+echo "=========================================="
+
 ${CTR} exec --nv \
     --bind "${PWD}:${PWD}" \
     --pwd "${PWD}" \
@@ -77,12 +84,7 @@ if [ -n '${ADAPTER_PATH:-}' ]; then
 fi
 
 CROP_ARGS=()
-if [ -n '${CROP_EXPAND:-}' ]; then
-    CROP_ARGS=(--crop-expand-ratio '${CROP_EXPAND}')
-fi
-if [ -n '${CROP_SIZE_RATIO:-}' ]; then
-    CROP_ARGS+=(--crop-size-ratio '${CROP_SIZE_RATIO}')
-fi
+CROP_ARGS=(--crop-size-ratio '${CROP_SIZE_RATIO}')
 
 echo '===== START EVIDENCE INFERENCE: GLOBAL DIRECT FRAMES, LOCAL EVIDENCE ====='
 echo 'Model: ${MODEL_NAME}'
@@ -93,7 +95,7 @@ echo 'Local evidence mode: ${REASONING_EVIDENCE_MODE}'
 echo 'Answer postprocess mode: ${ANSWER_POSTPROCESS_MODE}'
 echo 'Crop insertion mode: ${CROP_INSERTION_MODE}'
 echo 'Crop expand ratio: ${CROP_EXPAND:-none}'
-echo 'Crop size ratio: ${CROP_SIZE_RATIO:-none}'
+echo 'Crop size ratio: ${CROP_SIZE_RATIO}'
 echo 'Evidence frame source: ${EVIDENCE_FRAME_SOURCE}'
 echo 'Localization prompt mode: ${LOCALIZATION_PROMPT_MODE}'
 
@@ -101,8 +103,8 @@ python ${SCRIPT_PATH} \
     --gt-json ${GT_JSON} \
     --video-dir ${VIDEO_DIR} \
     --model-name ${MODEL_NAME} \
-    \"\${ADAPTER_ARGS[@]}\" \
-    \"\${CROP_ARGS[@]}\" \
+    "\${ADAPTER_ARGS[@]}" \
+    "\${CROP_ARGS[@]}" \
     --vts-config ${VTS_CONFIG} \
     --vts-model ${VTS_MODEL} \
     --output ${OUTPUT_JSON} \
@@ -117,8 +119,4 @@ python ${SCRIPT_PATH} \
     --answer-postprocess-mode ${ANSWER_POSTPROCESS_MODE} \
     --crop-insertion-mode ${CROP_INSERTION_MODE} \
     --evidence-frame-source ${EVIDENCE_FRAME_SOURCE} \
-    --localization-prompt-mode ${LOCALIZATION_PROMPT_MODE}
-
-echo '===== FINISHED EVIDENCE GLOBAL-DIRECT INFERENCE ====='
-echo 'Output json: ${OUTPUT_JSON}'
-"
+    --localization-prompt-mode ${LOCALIZATION_PROMPT_MODE}"

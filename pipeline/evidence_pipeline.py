@@ -83,6 +83,8 @@ class EvidenceMiningPipeline:
                  reasoning_local_crop_count: int = 3,
                  answer_postprocess_mode: str = "simple",
                  crop_insertion_mode: str = "replace",
+                 crop_expand_ratio: float = None,
+                 crop_size_ratio: float = None,
                  evidence_frame_source: str = "retrieved",
                  localization_prompt_mode: str = "structured"):
         """
@@ -127,6 +129,35 @@ class EvidenceMiningPipeline:
             logger.warning(f"Unknown localization prompt mode '{localization_prompt_mode}', using structured")
             localization_prompt_mode = "structured"
         self.localization_prompt_mode = localization_prompt_mode
+
+        if crop_expand_ratio is not None:
+            try:
+                crop_expand_ratio = float(crop_expand_ratio)
+                if crop_expand_ratio <= 0:
+                    raise ValueError
+            except (ValueError, TypeError):
+                logger.warning(
+                    f"Invalid crop_expand_ratio '{crop_expand_ratio}', disabling crop expansion"
+                )
+                crop_expand_ratio = None
+        self.crop_expand_ratio = crop_expand_ratio
+
+        if crop_size_ratio is not None:
+            try:
+                crop_size_ratio = float(crop_size_ratio)
+                if not (0.0 < crop_size_ratio <= 1.0):
+                    raise ValueError
+            except (ValueError, TypeError):
+                logger.warning(
+                    f"Invalid crop_size_ratio '{crop_size_ratio}', disabling fixed crop sizing"
+                )
+                crop_size_ratio = None
+        self.crop_size_ratio = crop_size_ratio
+
+        if self.crop_expand_ratio is not None and self.crop_size_ratio is not None:
+            logger.warning(
+                "Both crop_expand_ratio and crop_size_ratio set; fixed-size crop ratio will take precedence"
+            )
         
         # Load model if not provided
         if self.model is None or self.processor is None:
@@ -335,8 +366,11 @@ class EvidenceMiningPipeline:
                 ocr_prompt = build_ocr_visibility_prompt(parsed_question)
                 crop_localization_prompt = build_crop_localization_scoring_prompt(parsed_question)
                 visibility_results = self._stage_4_score_visibility(
-                    localization_results, ocr_prompt, crop_localization_prompt, verbose
-                )
+                localization_results,
+                ocr_prompt,
+                crop_localization_prompt,
+                verbose,
+            )
                 
                 if visibility_results["success"]:
                     global_frames = sampled_frames
@@ -522,7 +556,9 @@ class EvidenceMiningPipeline:
             model=self.model,
             processor=self.processor,
             device=self.device,
-            ocr_score_mode=self.ocr_score_mode
+            ocr_score_mode=self.ocr_score_mode,
+            crop_expand_ratio=self.crop_expand_ratio,
+            crop_size_ratio=self.crop_size_ratio,
         )
         
         if verbose and results["success"]:
